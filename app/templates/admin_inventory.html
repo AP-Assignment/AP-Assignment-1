@@ -6,10 +6,13 @@
       <h2 class="h4 fw-semibold mb-1">Machine inventory</h2>
       <div class="text-muted small">Toggle out-of-service status for maintenance windows</div>
     </div>
-    <form method="get" class="d-flex gap-2">
-      <input class="form-control form-control-sm" name="q" value="{{ q }}" placeholder="Search name/type/category…">
-      <button class="btn btn-sm btn-outline-light">Search</button>
-    </form>
+    <div class="d-flex gap-2 align-items-start">
+      <form method="get" class="d-flex gap-2">
+        <input class="form-control form-control-sm" name="q" value="{{ q }}" placeholder="Search name/type/category…">
+        <button class="btn btn-sm btn-outline-light">Search</button>
+      </form>
+      <a class="btn btn-sm btn-outline-light" href="{{ url_for('admin.export_machines') }}">Export (CSV)</a>
+    </div>
   </div>
 
   <div class="card mt-4 p-3 shadow-sm">
