@@ -199,6 +199,51 @@ def export_bookings():
 
     return Response(output.getvalue(), mimetype="text/csv", headers={"Content-Disposition": "attachment; filename=bookings_export.csv"})
 
+@bp.get("/export/utilisation.csv")
+@login_required
+def export_utilisation():
+    if not _require({"admin"}):
+        return redirect(url_for("admin.dashboard"))
+    with current_app.session_factory() as db:
+        util = utilisation_last_days(db, days=30)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    writer.writerow(["section", "name", "category", "hours"])
+    for row in util["by_machine"]:
+        writer.writerow(["by_machine", row["machine"], row["category"], row["hours"]])
+    for row in util["by_category"]:
+        writer.writerow(["by_category", row["category"], "", row["hours"]])
+
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=utilisation_export.csv"},
+    )
+
+@bp.get("/export/machines.csv")
+@login_required
+def export_machines():
+    if not _require({"admin"}):
+        return redirect(url_for("admin.dashboard"))
+    with current_app.session_factory() as db:
+        machines = db.execute(
+            select(Machine).options(joinedload(Machine.site)).order_by(Machine.name.asc())
+        ).scalars().all()
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["id", "name", "machine_type", "category", "site", "city", "status"])
+        for m in machines:
+            writer.writerow([m.id, m.name, m.machine_type, m.category, m.site.name, m.site.city, m.status])
+
+    return Response(
+        output.getvalue(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=machines_export.csv"},
+    )
+
 @bp.post("/machines/<int:machine_id>/toggle_oos")
 @login_required
 def toggle_oos(machine_id: int):
