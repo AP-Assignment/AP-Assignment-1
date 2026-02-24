@@ -7,12 +7,12 @@ Created on Tue Jan 13 14:18:54 2026
 
 import csv
 import io
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from datetime import datetime, timedelta
 from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app, Response
 from flask_login import login_required, current_user
 from sqlalchemy import select, func
-from ..models import User, BookingRequest, Machine, AuditLog
+from ..models import User, BookingRequest, BookingItem, Machine, AuditLog
 from ..services.booking_rules import has_conflicts_for_approved_bookings
 from ..services.utilisation import utilisation_last_days
 from ..services.notifications import queue_notification
@@ -59,7 +59,14 @@ def dashboard():
         ).scalar_one()
 
         pending_bookings = db.execute(
-            select(BookingRequest).where(BookingRequest.status == status).order_by(BookingRequest.start_at.asc()).limit(100)
+            select(BookingRequest)
+            .options(
+                selectinload(BookingRequest.requester),
+                selectinload(BookingRequest.items).selectinload(BookingItem.machine),
+            )
+            .where(BookingRequest.status == status)
+            .order_by(BookingRequest.start_at.asc())
+            .limit(100)
         ).scalars().all()
 
     return render_template(
@@ -232,4 +239,3 @@ def inventory():
         machines = db.execute(stmt.limit(200)).scalars().all()
 
     return render_template("admin_inventory.html", machines=machines, q=q)
-
