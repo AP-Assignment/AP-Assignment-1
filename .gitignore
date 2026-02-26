@@ -11,6 +11,7 @@ venv/
 
 # DB / local state
 app.db
+*.db
 *.sqlite
 *.sqlite3
 
