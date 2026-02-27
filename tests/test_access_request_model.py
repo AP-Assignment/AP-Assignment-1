@@ -115,6 +115,7 @@ def test_access_request_approval_workflow(db, requester, approver, site):
 
     db.add(AccessRequestStatusHistory(
         access_request_id=req.id,
+        previous_status="pending",
         status="approved",
         changed_by_id=approver.id,
         note="Access granted for Q2 sprint.",
@@ -140,6 +141,7 @@ def test_access_request_rejection(db, requester, approver):
 
     db.add(AccessRequestStatusHistory(
         access_request_id=req.id,
+        previous_status="pending",
         status="rejected",
         changed_by_id=approver.id,
         note="Insufficient justification.",
@@ -160,9 +162,10 @@ def test_status_history_records_transitions(db, requester, approver):
     db.add(req)
     db.flush()
 
-    # Record initial "pending" state
+    # Record initial "pending" state (no previous status on creation)
     db.add(AccessRequestStatusHistory(
         access_request_id=req.id,
+        previous_status=None,
         status="pending",
         changed_by_id=requester.id,
         note="Request submitted.",
@@ -176,6 +179,7 @@ def test_status_history_records_transitions(db, requester, approver):
     req.updated_at = datetime.utcnow()
     db.add(AccessRequestStatusHistory(
         access_request_id=req.id,
+        previous_status="pending",
         status="approved",
         changed_by_id=approver.id,
     ))
@@ -185,6 +189,8 @@ def test_status_history_records_transitions(db, requester, approver):
     assert len(fetched.status_history) == 2
     statuses = [h.status for h in fetched.status_history]
     assert statuses == ["pending", "approved"]
+    previous_statuses = [h.previous_status for h in fetched.status_history]
+    assert previous_statuses == [None, "pending"]
 
 
 def test_status_history_without_actor(db, requester):
@@ -195,6 +201,7 @@ def test_status_history_without_actor(db, requester):
 
     db.add(AccessRequestStatusHistory(
         access_request_id=req.id,
+        previous_status="approved",
         status="revoked",
         changed_by_id=None,
         note="Automatically revoked after 90 days.",
@@ -204,7 +211,55 @@ def test_status_history_without_actor(db, requester):
     fetched = db.get(AccessRequest, req.id)
     history = fetched.status_history[0]
     assert history.changed_by_id is None
+    assert history.previous_status == "approved"
     assert history.note == "Automatically revoked after 90 days."
+
+
+def test_status_history_previous_status_is_none_for_initial_entry(db, requester):
+    """The first history entry has no previous status (request was just created)."""
+    req = AccessRequest(requester_id=requester.id, assignment="Initial entry test")
+    db.add(req)
+    db.flush()
+
+    db.add(AccessRequestStatusHistory(
+        access_request_id=req.id,
+        previous_status=None,
+        status="pending",
+        changed_by_id=requester.id,
+        note="Access request created.",
+    ))
+    db.commit()
+
+    fetched = db.get(AccessRequest, req.id)
+    history = fetched.status_history[0]
+    assert history.previous_status is None
+    assert history.status == "pending"
+
+
+def test_status_history_full_lifecycle(db, requester, approver):
+    """Validate previous/next status through a full pending→approved→revoked cycle."""
+    req = AccessRequest(requester_id=requester.id, assignment="Full lifecycle test")
+    db.add(req)
+    db.flush()
+
+    transitions = [
+        (None, "pending"),
+        ("pending", "approved"),
+        ("approved", "revoked"),
+    ]
+    for prev, nxt in transitions:
+        db.add(AccessRequestStatusHistory(
+            access_request_id=req.id,
+            previous_status=prev,
+            status=nxt,
+            changed_by_id=approver.id if prev else requester.id,
+        ))
+    db.commit()
+
+    fetched = db.get(AccessRequest, req.id)
+    history = fetched.status_history
+    assert len(history) == 3
+    assert [(h.previous_status, h.status) for h in history] == transitions
 
 
 # ---------------------------------------------------------------------------

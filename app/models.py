@@ -210,12 +210,20 @@ class AccessRequest(Base):
 
 
 class AccessRequestStatusHistory(Base):
-    """Immutable audit trail of every status transition on an AccessRequest."""
+    """Immutable audit trail of every status transition on an AccessRequest.
+
+    Each row captures a single status change, recording both the previous and
+    next status so that the full transition history can be reconstructed for
+    compliance and audit purposes.
+    """
 
     __tablename__ = "access_request_status_history"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     access_request_id: Mapped[int] = mapped_column(ForeignKey("access_requests.id"), nullable=False)
+    # Status value *before* this transition (None for the initial creation entry)
+    previous_status: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    # Status value *after* this transition
     status: Mapped[str] = mapped_column(String(20), nullable=False)
     changed_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     changed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
