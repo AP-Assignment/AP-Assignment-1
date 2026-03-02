@@ -1,8 +1,8 @@
 # Automation Rules — Background Monitoring (Lean SLA Model)
 
-**Project:** Test Machine Booking 
-**Scope:** Formal specification for all time-based automation executed by the background monitoring system, including **current** and **planned** rules.  
-**Rule set version:** `automation_rules_v1.0`  
+**Project:** Test Machine Booking  
+**Scope:** Formal specification for all time-based automation executed by the background monitoring system, including **current** and **planned** rules, covering **AccessRequests** and **BookingRequests**.  
+**Rule set version:** `automation_rules_v1.1`  
 **Out of scope:** Implementation code, schema redesign, access-window state machine.
 
 ---
@@ -60,12 +60,12 @@ To avoid ambiguity, each rule in this document is labelled as one of:
 **Audit expectation (recommended):**
 - Dispatch actions MAY be audited, but are not required for SLA evidence (message-level persistence already exists).
 
-### 3.2 Booking No-Show Detection (IMPLEMENTED)
+### 3.2 Booking No-Show Detection (IMPLEMENTED — updated spec v1.1)
 **Entity:** `BookingRequest`
 
 A booking is considered a **no-show** when all are true:
 - `status == "approved"`
-- `end_at < (now_utc - 15 minutes)`
+- `now_utc > start_at + 5 minutes` (5-minute grace period after booking start)
 - `checked_in == false`
 - `no_show == false`
 
@@ -77,7 +77,7 @@ A booking is considered a **no-show** when all are true:
 - A booking is only marked once because the rule only applies when `no_show == false`.
 
 **Audit (recommended):**
-- When a booking transitions to `no_show=true`, an audit event SHOULD be recorded (see Section 9).
+- When a booking transitions to `no_show=true`, an audit event SHOULD be recorded (see Section 9) with reason code `NO_SHOW_RULE` and `entity_type = BookingRequest`.
 
 ---
 
@@ -92,6 +92,17 @@ Access Requests are expected to have (at minimum):
 - a creation timestamp (`created_at`)
 - optionally decision fields (`resolved_at`, `resolved_by`, `decision_note`)
 - optionally a status/audit history record
+
+### 4.2 Entity in Scope: Booking Request (PLANNED)
+A **Booking Request** is a time-bound reservation record that represents a user request to use one or more machines during a specific time window, requiring an approval decision.
+
+Booking Requests are expected to have (at minimum):
+- an identifier (`id`)
+- a `status`
+- a creation timestamp (`created_at`)
+- scheduling fields (`start_at`, `end_at`)
+- attendance flags (`checked_in`, `no_show`)
+- optionally decision fields (`decided_at`, `approver_id`, `decision_note`)
 
 ---
 
@@ -112,6 +123,20 @@ Canonical status values in this project are documented in **lowercase** to match
 **Notes**
 - Only `pending` is subject to SLA evaluation in this lean ruleset.
 - `expired` is optional in implementation, but recommended for strong automation evidence.
+
+### 5.3 BookingRequest.status (canonical model)
+| Status | Meaning |
+|---|---|
+| `pending` | Awaiting approval decision |
+| `approved` | Booking confirmed by approver |
+| `rejected` | Booking denied |
+| `cancelled` | Cancelled by requester or admin before start |
+| `expired` | Automatically closed due to pending approval exceeding time limits (system action) |
+
+**Notes**
+- Only `pending` is subject to SLA evaluation in this lean ruleset.
+- `expired` is set by the automation system when a `pending` booking exceeds the auto-expiry threshold.
+- `no_show` is a separate boolean flag on the record, not a status value.
 
 ---
 
@@ -134,7 +159,33 @@ These thresholds are intentionally simple and easy to demonstrate. Adjust only b
 
 ---
 
-## 7. Classification Rules (PLANNED)
+## 6B. SLA Thresholds (Lean) — Booking Requests (PLANNED)
+
+These thresholds mirror the AccessRequest SLA model for consistency.
+
+### 6B.1 Overdue Approval SLA
+**Applies when:** `status == "pending"`
+
+- **SLA start time:** `created_at`
+- **Warning threshold:** `created_at + 8 hours`
+- **Breach threshold:** `created_at + 48 hours`
+
+### 6B.2 Auto-expiry
+**Applies when:** `status == "pending"`
+
+- **Expiry threshold:** `created_at + 7 days`
+- **Outcome:** transition to `expired`
+
+### 6B.3 No-Show Rule
+**Applies when:** `status == "approved"` and `checked_in == false` and `no_show == false`
+
+- **Grace period:** 5 minutes after `start_at`
+- **Trigger condition:** `now_utc > start_at + 5 minutes`
+- **Outcome:** set `no_show = true`
+
+---
+
+## 7. Classification Rules — Access Requests (PLANNED)
 
 For a given Access Request in `pending`, compute elapsed time:
 
@@ -163,6 +214,35 @@ Classify as:
 
 ---
 
+## 7B. Classification Rules — Booking Requests (PLANNED)
+
+For a given Booking Request in `pending`, compute elapsed time:
+
+`age = now_utc - created_at`
+
+Classify as:
+
+1. **OK**
+   - Condition: `age < 8 hours`
+   - Meaning: No SLA action required.
+
+2. **SLA_WARNING_APPROVAL**
+   - Condition: `8 hours <= age < 48 hours`
+   - Meaning: Approval is overdue soon; prompt action.
+
+3. **SLA_BREACH_APPROVAL**
+   - Condition: `48 hours <= age < 7 days`
+   - Meaning: SLA is breached; escalate.
+
+4. **AUTO_EXPIRE**
+   - Condition: `age >= 7 days`
+   - Meaning: Booking request is stale; close automatically.
+
+**Priority rule:** If multiple thresholds could apply, choose the most severe by time:
+`AUTO_EXPIRE` > `SLA_BREACH_APPROVAL` > `SLA_WARNING_APPROVAL` > `OK`
+
+---
+
 ## 8. Actions (Spec-Level)
 
 The rule engine returns **structured actions**. The action handler applies them.
@@ -176,10 +256,16 @@ The rule engine returns **structured actions**. The action handler applies them.
 | `AUDIT_EVENT` | Write a structured audit record of automated action |
 
 ### 8.2 Notification recipients (PLANNED)
-For AccessRequest SLA events, notifications are sent to:
+For **AccessRequest** SLA events, notifications are sent to:
 - **Admins** (users with role `admin`)
 
-*(No requester notifications are required by this v1.0 ruleset.)*
+For **BookingRequest** SLA events, notifications are sent to:
+- **Admins** (users with role `admin`)
+
+For **BookingRequest no-show** events, notifications are sent to:
+- **The requester** (booking owner)
+
+*(Requester notifications for SLA warning/breach are not required by this v1.1 ruleset.)*
 
 ### 8.3 Action Rules
 #### A) Warning
@@ -231,13 +317,13 @@ All automated actions that affect operational state should write a structured au
 | `actor_type` | enum | `SYSTEM` |
 | `actor_id` | string | `scheduler` |
 | `actor_email` | string | `system@scheduler` |
-| `entity_type` | enum | `AccessRequest` |
+| `entity_type` | enum | `AccessRequest`, `BookingRequest` |
 | `entity_id` | int/string | `123` |
 | `action` | enum | `SLA_WARNING_SENT`, `SLA_BREACH_SENT`, `STATUS_CHANGED`, `NO_SHOW_RECORDED` |
 | `previous_status` | string/null | `pending` |
 | `new_status` | string/null | `expired` |
 | `reason_code` | enum | `SLA_WARNING_APPROVAL`, `SLA_BREACH_APPROVAL`, `AUTO_EXPIRE`, `NO_SHOW_RULE` |
-| `rule_version` | string | `automation_rules_v1.0` |
+| `rule_version` | string | `automation_rules_v1.1` |
 | `details` | JSON | `{ "age_hours": 52, "warning_hours": 8, "breach_hours": 48 }` |
 
 ### 10.2 Audit Rules
@@ -261,18 +347,27 @@ Until a richer schema exists, the canonical audit fields MUST be encoded as foll
   - `automation:<reason_code>` (e.g., `automation:SLA_WARNING_APPROVAL`)
   - `automation:NO_SHOW_RULE`
 - `AuditLog.detail` = a single-line structured payload (JSON or key=value), recommended:
-  - `rule_version=automation_rules_v1.0 entity_type=AccessRequest entity_id=123 previous_status=pending new_status=expired details={"age_hours":52,...}`
+  - `rule_version=automation_rules_v1.1 entity_type=AccessRequest entity_id=123 previous_status=pending new_status=expired details={"age_hours":52,...}`
+  - `rule_version=automation_rules_v1.1 entity_type=BookingRequest entity_id=456 previous_status=pending new_status=expired details={"age_hours":172,...}`
+  - `rule_version=automation_rules_v1.1 entity_type=BookingRequest entity_id=789 no_show=true details={"grace_minutes":5,...}`
 
 This preserves audit traceability without requiring schema redesign.
 
 ---
 
-## 11. Acceptance Checklist (Task 19)
+## 11. Acceptance Checklist (Issues 19, 30, 31)
 
 - [x] `docs/automation_rules.md` created/updated and committed
-- [x] Thresholds explicitly defined: warning, breach, expiry
-- [x] Canonical status values agreed and documented
-- [x] Audit fields and system actor definition documented
+- [x] Rule set version bumped to `automation_rules_v1.1`
+- [x] Scope expanded to cover both AccessRequests and BookingRequests
+- [x] BookingRequest SLA thresholds defined (warn/breach/auto-expire) consistent with AccessRequest
+- [x] BookingRequest no-show rule updated: 5-minute grace period after `start_at`
+- [x] Canonical `BookingRequest.status` values documented (including `expired`)
+- [x] Canonical `AccessRequest.status` values documented (including `expired`)
+- [x] Classification rules documented for both entities (Sections 7 and 7B)
+- [x] Notification recipients defined for both entities
+- [x] Audit fields and system actor definition documented for both entities
+- [x] Reason codes and `rule_version` updated in audit spec
 - [x] No implementation code included
 
 ---
