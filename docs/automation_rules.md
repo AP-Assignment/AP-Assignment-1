@@ -2,7 +2,7 @@
 
 **Project:** Test Machine Booking 
 **Scope:** Formal specification for all time-based automation executed by the background monitoring system, including **current** and **planned** rules.  
-**Rule set version:** `automation_rules_v1.0`  
+**Rule set version:** `automation_rules_v1.1`  
 **Out of scope:** Implementation code, schema redesign, access-window state machine.
 
 ---
@@ -79,6 +79,8 @@ A booking is considered a **no-show** when all are true:
 **Audit (recommended):**
 - When a booking transitions to `no_show=true`, an audit event SHOULD be recorded (see Section 9).
 
+> **Note — threshold difference vs. Issue #31 (PLANNED):** The current implementation triggers no-show detection 15 minutes *after `end_at`*. Issue #31 targets a stricter rule: no-show is detected 5 minutes *after `start_at`* (see Section 4.3). The planned rule will replace this implementation once validated.
+
 ---
 
 ## 4. Planned / Target Automations (Lean SLA Model)
@@ -92,6 +94,49 @@ Access Requests are expected to have (at minimum):
 - a creation timestamp (`created_at`)
 - optionally decision fields (`resolved_at`, `resolved_by`, `decision_note`)
 - optionally a status/audit history record
+
+### 4.2 BookingRequest Approval SLA Automation (PLANNED) — Issue #30
+**Entity:** `BookingRequest`
+
+A booking approval is considered overdue when a `BookingRequest` with `status == "pending"` has been pending too long. This automation evaluates SLA thresholds against `created_at` and transitions long-pending bookings to `expired`.
+
+**Applies when:**
+- `status == "pending"` (not `cancelled`, `rejected`, `approved`, or `expired`)
+
+**SLA start time:** `created_at`
+
+**Thresholds (see Section 6.3):**
+- Warning threshold: `created_at + 8 hours`
+- Breach threshold: `created_at + 48 hours`
+- Expiry threshold: `created_at + 7 days`
+
+**Actions (see Section 8):**
+- Warning → `NOTIFY_WARNING` to admins + `AUDIT_EVENT`
+- Breach → `NOTIFY_BREACH` to admins + `AUDIT_EVENT`
+- Expiry → `STATUS_SET_EXPIRED` (transition to `status = "expired"`) + `NOTIFY_BREACH` + `AUDIT_EVENT`
+
+**Idempotency:** each warning, breach and expiry action is emitted at most once per request (see Section 9).
+
+### 4.3 BookingRequest No-Show Automation (PLANNED) — Issue #31
+**Entity:** `BookingRequest`
+
+A booking is considered a **no-show** when the user does not check in within the grace period after the booking start time.
+
+**Preconditions (all must be true):**
+- `status == "approved"`
+- `checked_in == false`
+- `no_show == false`
+- `now_utc > start_at + GRACE_PERIOD` (where `GRACE_PERIOD = 5 minutes`)
+
+**Action:**
+- set `no_show = true`
+- write a structured audit/log entry (see Section 9 and 10)
+- (optional) queue notification to relevant parties
+
+**Idempotency / de-duplication:**
+- The rule is a no-op when `no_show == true` or `checked_in == true`; no duplicate actions can occur.
+
+> **Threshold change from current implementation (Section 3.2):** The current implementation fires 15 minutes *after `end_at`*; this planned rule fires 5 minutes *after `start_at`*. The earlier trigger ensures no-shows are recorded promptly.
 
 ---
 
@@ -112,6 +157,19 @@ Canonical status values in this project are documented in **lowercase** to match
 **Notes**
 - Only `pending` is subject to SLA evaluation in this lean ruleset.
 - `expired` is optional in implementation, but recommended for strong automation evidence.
+
+### 5.3 BookingRequest.status (PLANNED canonical model)
+| Status | Meaning |
+|---|---|
+| `pending` | Awaiting approval decision |
+| `approved` | Booking approved; user may use the resource |
+| `rejected` | Booking denied |
+| `cancelled` | Booking cancelled by user or admin |
+| `expired` | Automatically closed because approval was not given within the SLA expiry window (system action) |
+
+**Notes**
+- Only `pending` is subject to approval-SLA evaluation (Section 6.3).
+- `expired` must be recognised as a valid status by the implementation (see Issue #30).
 
 ---
 
@@ -134,7 +192,26 @@ These thresholds are intentionally simple and easy to demonstrate. Adjust only b
 
 ---
 
+## 6A. SLA Thresholds (Lean) — BookingRequests (PLANNED) — Issue #30
+
+### 6.3 Overdue Approval SLA
+**Applies when:** `status == "pending"`
+
+- **SLA start time:** `created_at`
+- **Warning threshold:** `created_at + 8 hours`
+- **Breach threshold:** `created_at + 48 hours`
+
+### 6.4 Auto-expiry
+**Applies when:** `status == "pending"`
+
+- **Expiry threshold:** `created_at + 7 days`
+- **Outcome:** transition to `status = "expired"`
+
+---
+
 ## 7. Classification Rules (PLANNED)
+
+### 7.1 Access Request Classification
 
 For a given Access Request in `pending`, compute elapsed time:
 
@@ -161,6 +238,40 @@ Classify as:
 **Priority rule:** If multiple thresholds could apply, choose the most severe by time:
 `AUTO_EXPIRE` > `SLA_BREACH_APPROVAL` > `SLA_WARNING_APPROVAL` > `OK`
 
+### 7.2 BookingRequest Classification — Issue #30
+
+For a given BookingRequest in `pending`, compute elapsed time:
+
+`age = now_utc - created_at`
+
+Classify as:
+
+1. **OK**
+   - Condition: `age < 8 hours`
+   - Meaning: No SLA action required.
+
+2. **SLA_WARNING_APPROVAL**
+   - Condition: `8 hours <= age < 48 hours`
+   - Meaning: Approval is overdue; prompt admin action.
+
+3. **SLA_BREACH_APPROVAL**
+   - Condition: `48 hours <= age < 7 days`
+   - Meaning: SLA is breached; escalate.
+
+4. **AUTO_EXPIRE**
+   - Condition: `age >= 7 days`
+   - Meaning: Booking is stale; expire automatically (`status = "expired"`).
+
+**Priority rule:** `AUTO_EXPIRE` > `SLA_BREACH_APPROVAL` > `SLA_WARNING_APPROVAL` > `OK`
+
+**Boundary conditions (testable):**
+- `age = 7 days 0 seconds` → `AUTO_EXPIRE`
+- `age = 6 days 23 hours 59 minutes 59 seconds` → `SLA_BREACH_APPROVAL`
+- `age = 48 hours 0 seconds` → `SLA_BREACH_APPROVAL`
+- `age = 47 hours 59 minutes 59 seconds` → `SLA_WARNING_APPROVAL`
+- `age = 8 hours 0 seconds` → `SLA_WARNING_APPROVAL`
+- `age = 7 hours 59 minutes 59 seconds` → `OK`
+
 ---
 
 ## 8. Actions (Spec-Level)
@@ -179,7 +290,13 @@ The rule engine returns **structured actions**. The action handler applies them.
 For AccessRequest SLA events, notifications are sent to:
 - **Admins** (users with role `admin`)
 
-*(No requester notifications are required by this v1.0 ruleset.)*
+For BookingRequest SLA events (Issue #30), notifications are sent to:
+- **Admins** (users with role `admin`)
+
+For BookingRequest no-show events (Issue #31), notifications are sent to:
+- **The requester** (booking owner)
+
+*(No additional recipients are required by this v1.1 ruleset.)*
 
 ### 8.3 Action Rules
 #### A) Warning
@@ -208,6 +325,7 @@ Automation must be safe to run repeatedly without spamming users.
 - A given request should receive **at most one** warning notification for `SLA_WARNING_APPROVAL`.
 - A given request should receive **at most one** breach notification for `SLA_BREACH_APPROVAL`.
 - Auto-expiry should occur **once**.
+- These rules apply equally to **AccessRequest** and **BookingRequest** SLA automation.
 
 ### 9.2 How to Achieve De-duplication (Implementation-Agnostic)
 Any one of the following is acceptable:
@@ -216,6 +334,11 @@ Any one of the following is acceptable:
 - store boolean markers (e.g., `warning_sent`, `breach_sent`) — only if absolutely necessary
 
 This document requires the behaviour; it does not mandate a storage mechanism.
+
+### 9.3 BookingRequest No-Show De-duplication (Issue #31)
+- The no-show rule applies only when `no_show == false` and `checked_in == false`.
+- Once `no_show = true` is set, the precondition is no longer satisfied; no further actions are taken.
+- Safe to run repeatedly without producing duplicate audit entries.
 
 ---
 
@@ -231,13 +354,13 @@ All automated actions that affect operational state should write a structured au
 | `actor_type` | enum | `SYSTEM` |
 | `actor_id` | string | `scheduler` |
 | `actor_email` | string | `system@scheduler` |
-| `entity_type` | enum | `AccessRequest` |
+| `entity_type` | enum | `AccessRequest`, `BookingRequest` |
 | `entity_id` | int/string | `123` |
 | `action` | enum | `SLA_WARNING_SENT`, `SLA_BREACH_SENT`, `STATUS_CHANGED`, `NO_SHOW_RECORDED` |
 | `previous_status` | string/null | `pending` |
 | `new_status` | string/null | `expired` |
 | `reason_code` | enum | `SLA_WARNING_APPROVAL`, `SLA_BREACH_APPROVAL`, `AUTO_EXPIRE`, `NO_SHOW_RULE` |
-| `rule_version` | string | `automation_rules_v1.0` |
+| `rule_version` | string | `automation_rules_v1.1` |
 | `details` | JSON | `{ "age_hours": 52, "warning_hours": 8, "breach_hours": 48 }` |
 
 ### 10.2 Audit Rules
@@ -261,18 +384,25 @@ Until a richer schema exists, the canonical audit fields MUST be encoded as foll
   - `automation:<reason_code>` (e.g., `automation:SLA_WARNING_APPROVAL`)
   - `automation:NO_SHOW_RULE`
 - `AuditLog.detail` = a single-line structured payload (JSON or key=value), recommended:
-  - `rule_version=automation_rules_v1.0 entity_type=AccessRequest entity_id=123 previous_status=pending new_status=expired details={"age_hours":52,...}`
+  - `rule_version=automation_rules_v1.1 entity_type=AccessRequest entity_id=123 previous_status=pending new_status=expired details={"age_hours":52,...}`
+  - `rule_version=automation_rules_v1.1 entity_type=BookingRequest entity_id=456 previous_status=pending new_status=expired details={"age_hours":169,...}`
 
 This preserves audit traceability without requiring schema redesign.
 
 ---
 
-## 11. Acceptance Checklist (Task 19)
+## 11. Acceptance Checklist (Issue #19 / v1.1)
 
 - [x] `docs/automation_rules.md` created/updated and committed
-- [x] Thresholds explicitly defined: warning, breach, expiry
-- [x] Canonical status values agreed and documented
+- [x] Thresholds explicitly defined for **AccessRequest** and **BookingRequest**: warning, breach, expiry
+- [x] Canonical status values (including `expired`) agreed and documented for both entities
 - [x] Audit fields and system actor definition documented
 - [x] No implementation code included
+- [x] Document version bumped to `automation_rules_v1.1`
+- [x] Current implemented no-show rule (Section 3.2) notes threshold difference vs. Issue #31 target
+- [x] BookingRequest approval SLA automation documented (Issue #30): warn/breach thresholds and `status="expired"` auto-expiry
+- [x] BookingRequest no-show automation documented (Issue #31): `no_show=true` if not checked-in within 5 minutes after `start_at`
+- [x] Idempotency/de-duplication expectations documented for BookingRequest SLA and no-show rules
+- [x] Boundary conditions listed for testability (Section 7.2)
 
 ---
