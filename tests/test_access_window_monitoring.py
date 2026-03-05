@@ -184,11 +184,12 @@ def test_missed_window_idempotent(SessionLocal, db):
 # ---------------------------------------------------------------------------
 
 def test_active_window_does_not_set_no_show(SessionLocal, db):
-    """A booking whose window is currently active must not be marked no_show."""
+    """A booking whose start_at is within the 5-minute grace period must not be marked no_show."""
     user = _make_user(db, "Alice", "alice@example.com")
     b = _make_booking(
         db, user.id,
-        start_at=_NOW - timedelta(hours=1),
+        # Started 3 minutes ago — still within the 5-minute grace period
+        start_at=_NOW - timedelta(minutes=3),
         end_at=_NOW + timedelta(hours=1),
         status="approved",
         checked_in=False,
@@ -202,7 +203,7 @@ def test_active_window_does_not_set_no_show(SessionLocal, db):
     with SessionLocal() as s:
         refreshed = s.get(BookingRequest, booking_id)
         assert refreshed.no_show is False
-        # Active windows produce no audit events
+        # Within-grace-period windows produce no audit events
         assert s.execute(select(AuditLog)).scalars().all() == []
 
 
@@ -353,3 +354,129 @@ def test_no_flask_context_required(SessionLocal, db):
     )
     db.commit()
     run_access_window_monitoring(SessionLocal, now=_NOW)  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Issue #31: 5-minute grace-period no-show rule
+# ---------------------------------------------------------------------------
+
+def test_within_grace_period_no_action(SessionLocal, db):
+    """Booking started less than 5 minutes ago must not be marked no_show."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    b = _make_booking(
+        db, user.id,
+        start_at=_NOW - timedelta(minutes=3),
+        end_at=_NOW + timedelta(hours=1),
+        status="approved",
+        checked_in=False,
+        no_show=False,
+    )
+    db.commit()
+    booking_id = b.id
+
+    run_access_window_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        refreshed = s.get(BookingRequest, booking_id)
+        assert refreshed.no_show is False
+        assert s.execute(select(AuditLog)).scalars().all() == []
+        assert s.execute(select(Notification)).scalars().all() == []
+
+
+def test_past_grace_period_sets_no_show(SessionLocal, db):
+    """Booking started more than 5 minutes ago with no check-in must be marked no_show."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    b = _make_booking(
+        db, user.id,
+        start_at=_NOW - timedelta(minutes=10),
+        end_at=_NOW + timedelta(hours=1),
+        status="approved",
+        checked_in=False,
+        no_show=False,
+    )
+    db.commit()
+    booking_id = b.id
+
+    run_access_window_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        refreshed = s.get(BookingRequest, booking_id)
+        assert refreshed.no_show is True
+
+
+def test_past_grace_period_writes_audit(SessionLocal, db):
+    """Booking past grace period must write a NO_SHOW_MARKED audit entry with system actor."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking(
+        db, user.id,
+        start_at=_NOW - timedelta(minutes=10),
+        end_at=_NOW + timedelta(hours=1),
+        status="approved",
+    )
+    db.commit()
+
+    run_access_window_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        logs = s.execute(select(AuditLog)).scalars().all()
+        assert len(logs) == 1
+        assert "NO_SHOW_MARKED" in logs[0].action
+        assert logs[0].actor_email == "system@scheduler"
+
+
+def test_past_grace_period_writes_notification(SessionLocal, db):
+    """Booking past grace period must notify the requester."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking(
+        db, user.id,
+        start_at=_NOW - timedelta(minutes=10),
+        end_at=_NOW + timedelta(hours=1),
+        status="approved",
+    )
+    db.commit()
+
+    run_access_window_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        notifs = s.execute(select(Notification)).scalars().all()
+        assert len(notifs) == 1
+        assert notifs[0].user_id == user.id
+
+
+def test_already_no_show_not_duplicated(SessionLocal, db):
+    """Booking already marked no_show must not produce additional audit or notification."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking(
+        db, user.id,
+        start_at=_NOW - timedelta(minutes=10),
+        end_at=_NOW + timedelta(hours=1),
+        status="approved",
+        checked_in=False,
+        no_show=True,
+    )
+    db.commit()
+
+    run_access_window_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        assert s.execute(select(AuditLog)).scalars().all() == []
+        assert s.execute(select(Notification)).scalars().all() == []
+
+
+def test_past_grace_period_idempotent(SessionLocal, db):
+    """Running the job twice for a past-grace-period booking must not duplicate audit or notifications."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking(
+        db, user.id,
+        start_at=_NOW - timedelta(minutes=10),
+        end_at=_NOW + timedelta(hours=1),
+        status="approved",
+    )
+    db.commit()
+
+    run_access_window_monitoring(SessionLocal, now=_NOW)
+    run_access_window_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        assert len(s.execute(select(AuditLog)).scalars().all()) == 1
+        assert len(s.execute(select(Notification)).scalars().all()) == 1
