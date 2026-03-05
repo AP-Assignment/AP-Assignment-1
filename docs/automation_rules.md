@@ -95,7 +95,7 @@ Access Requests are expected to have (at minimum):
 - optionally decision fields (`resolved_at`, `resolved_by`, `decision_note`)
 - optionally a status/audit history record
 
-### 4.2 BookingRequest Approval SLA Automation (PLANNED) — Issue #30
+### 4.2 BookingRequest Approval SLA Automation (IMPLEMENTED) — Issue #30
 **Entity:** `BookingRequest`
 
 A booking approval is considered overdue when a `BookingRequest` with `status == "pending"` has been pending too long. This automation evaluates SLA thresholds against `created_at` and transitions long-pending bookings to `expired`.

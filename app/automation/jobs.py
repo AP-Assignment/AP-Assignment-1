@@ -45,7 +45,11 @@ def run_sla_monitoring(
     now: Optional[datetime] = None,
     rule_version: str = _DEFAULT_RULE_VERSION,
 ) -> None:
-    """Evaluate SLA rules for all pending AccessRequests and apply actions.
+    """Evaluate SLA rules for all pending AccessRequests and BookingRequests and apply actions.
+
+    Processes both entity types within a single session:
+    - Pending ``AccessRequest`` rows (existing behaviour)
+    - Pending ``BookingRequest`` rows (Issue #30)
 
     Parameters
     ----------
@@ -62,17 +66,18 @@ def run_sla_monitoring(
         now = datetime.utcnow()
 
     with job_session(SessionLocal, job_name="sla_monitoring") as db:
-        requests = db.execute(
+        # --- AccessRequest ---
+        ar_requests = db.execute(
             select(AccessRequest).where(AccessRequest.status == "pending")
         ).scalars().all()
 
         _logger.info(
             "job=sla_monitoring actor=%s entity_type=AccessRequest entity_count=%d",
-            _SYSTEM_ACTOR, len(requests),
+            _SYSTEM_ACTOR, len(ar_requests),
         )
 
-        actions_applied = 0
-        for request in requests:
+        ar_actions_applied = 0
+        for request in ar_requests:
             result = evaluate_request(now, request, entity_type="AccessRequest")
             if result["actions"]:
                 reasons = [a.get("reason", "") for a in result["actions"]]
@@ -80,12 +85,39 @@ def run_sla_monitoring(
                     "job=sla_monitoring actor=%s entity_type=AccessRequest entity_id=%s state=%s",
                     _SYSTEM_ACTOR, request.id, ",".join(reasons),
                 )
-                actions_applied += 1
+                ar_actions_applied += 1
             apply_actions(db, request, result["actions"], now=now, rule_version=rule_version)
 
         _logger.info(
-            "job=sla_monitoring actor=%s completed evaluated=%d with_actions=%d",
-            _SYSTEM_ACTOR, len(requests), actions_applied,
+            "job=sla_monitoring actor=%s entity_type=AccessRequest completed evaluated=%d with_actions=%d",
+            _SYSTEM_ACTOR, len(ar_requests), ar_actions_applied,
+        )
+
+        # --- BookingRequest (Issue #30) ---
+        br_requests = db.execute(
+            select(BookingRequest).where(BookingRequest.status == "pending")
+        ).scalars().all()
+
+        _logger.info(
+            "job=sla_monitoring actor=%s entity_type=BookingRequest entity_count=%d",
+            _SYSTEM_ACTOR, len(br_requests),
+        )
+
+        br_actions_applied = 0
+        for request in br_requests:
+            result = evaluate_request(now, request, entity_type="BookingRequest")
+            if result["actions"]:
+                reasons = [a.get("reason", "") for a in result["actions"]]
+                _logger.info(
+                    "job=sla_monitoring actor=%s entity_type=BookingRequest entity_id=%s state=%s",
+                    _SYSTEM_ACTOR, request.id, ",".join(reasons),
+                )
+                br_actions_applied += 1
+            apply_actions(db, request, result["actions"], now=now, rule_version=rule_version)
+
+        _logger.info(
+            "job=sla_monitoring actor=%s entity_type=BookingRequest completed evaluated=%d with_actions=%d",
+            _SYSTEM_ACTOR, len(br_requests), br_actions_applied,
         )
 
 
