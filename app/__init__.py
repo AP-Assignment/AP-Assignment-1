@@ -18,7 +18,7 @@ from .db import Base
 from .models import User
 from .services.notifications import process_notification_queue
 from .services.no_show import mark_no_shows
-from .automation.jobs import run_sla_monitoring
+from .automation.jobs import run_sla_monitoring, run_access_window_monitoring
 
 login_manager = LoginManager()
 login_manager.login_view = "auth.login"
@@ -124,6 +124,13 @@ def create_app():
         "interval",
         minutes=5,
         id="sla_monitoring",
+        **_job_defaults,
+    )
+    scheduler.add_job(
+        lambda: run_access_window_monitoring(SessionLocal),
+        "interval",
+        minutes=1,
+        id="access_window_monitoring",
         **_job_defaults,
     )
 
