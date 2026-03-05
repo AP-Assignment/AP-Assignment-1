@@ -42,6 +42,40 @@
   </div>
 
   <div class="row g-3 mt-1">
+    <div class="col-12">
+      <div class="card p-3">
+        <div class="fw-semibold mb-2">Automation monitoring <span class="text-muted small fw-normal">— system / scheduler metrics</span></div>
+        <div class="row g-2">
+          <div class="col-6 col-md-3">
+            <div class="card p-3 text-center">
+              <div class="text-muted small">Access Requests: Pending</div>
+              <div class="fs-3 fw-semibold">{{ ar_pending }}</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="card p-3 text-center border-warning">
+              <div class="text-muted small">SLA Warning</div>
+              <div class="fs-3 fw-semibold text-warning">{{ ar_sla_warning }}</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="card p-3 text-center border-danger">
+              <div class="text-muted small">SLA Breach</div>
+              <div class="fs-3 fw-semibold text-danger">{{ ar_sla_breach }}</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="card p-3 text-center">
+              <div class="text-muted small">Expired</div>
+              <div class="fs-3 fw-semibold text-secondary">{{ ar_expired }}</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mt-1">
     <div class="col-lg-7">
       <div class="card p-3">
         <div class="d-flex justify-content-between align-items-center">

@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app, Response
 from flask_login import login_required, current_user
 from sqlalchemy import select, func
-from ..models import User, BookingRequest, BookingItem, Machine, AuditLog
+from ..models import User, BookingRequest, BookingItem, Machine, AuditLog, AccessRequest
 from ..services.booking_rules import has_conflicts_for_approved_bookings
 from ..services.utilisation import utilisation_last_days
 from ..services.notifications import queue_notification
@@ -58,6 +58,38 @@ def dashboard():
             select(func.count()).select_from(Machine).where(Machine.status == "out_of_service")
         ).scalar_one()
 
+        # Automation monitoring: AccessRequest counts by SLA state
+        _now = datetime.utcnow()
+        _warn_threshold   = _now - timedelta(hours=8)
+        _breach_threshold = _now - timedelta(hours=48)
+
+        ar_pending = db.execute(
+            select(func.count()).select_from(AccessRequest)
+            .where(AccessRequest.status == "pending", AccessRequest.created_at > _warn_threshold)
+        ).scalar_one()
+
+        ar_sla_warning = db.execute(
+            select(func.count()).select_from(AccessRequest)
+            .where(
+                AccessRequest.status == "pending",
+                AccessRequest.created_at <= _warn_threshold,
+                AccessRequest.created_at > _breach_threshold,
+            )
+        ).scalar_one()
+
+        ar_sla_breach = db.execute(
+            select(func.count()).select_from(AccessRequest)
+            .where(
+                AccessRequest.status == "pending",
+                AccessRequest.created_at <= _breach_threshold,
+            )
+        ).scalar_one()
+
+        ar_expired = db.execute(
+            select(func.count()).select_from(AccessRequest)
+            .where(AccessRequest.status == "expired")
+        ).scalar_one()
+
         pending_bookings = db.execute(
             select(BookingRequest)
             .options(
@@ -76,6 +108,10 @@ def dashboard():
         cancellations_30=cancellations_30,
         no_shows_30=no_shows_30,
         out_of_service=out_of_service,
+        ar_pending=ar_pending,
+        ar_sla_warning=ar_sla_warning,
+        ar_sla_breach=ar_sla_breach,
+        ar_expired=ar_expired,
         pending_bookings=pending_bookings,
         status=status,
     )

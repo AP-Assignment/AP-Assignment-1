@@ -17,6 +17,7 @@ Usage::
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -24,6 +25,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import AuditLog, Notification, User
+
+_logger = logging.getLogger(__name__)
 
 # Lazy import guard: AccessRequestStatusHistory may not exist in all
 # deployments; we import it only when needed rather than at module level.
@@ -148,6 +151,11 @@ def _handle_status_change(
 
     # Natural idempotency: skip if status is already the target value.
     if request.status == new_status:
+        _logger.debug(
+            "actor=%s action=STATUS_CHANGE entity_type=%s entity_id=%s "
+            "new_status=%s skipped=idempotency",
+            _SYSTEM_ACTOR, entity_type, entity_id, new_status,
+        )
         return
 
     previous_status = request.status
@@ -175,6 +183,11 @@ def _handle_status_change(
         action=audit_action,
         detail=detail,
     ))
+    _logger.info(
+        "actor=%s action=STATUS_CHANGE entity_type=%s entity_id=%s "
+        "previous_status=%s new_status=%s reason=%s",
+        _SYSTEM_ACTOR, entity_type, entity_id, previous_status, new_status, reason,
+    )
 
 
 def _handle_notify(
@@ -190,6 +203,10 @@ def _handle_notify(
 ) -> None:
     # Idempotency: skip if we already issued this notification for this entity.
     if _audit_exists(db_session, audit_action, entity_id):
+        _logger.debug(
+            "actor=%s action=NOTIFY entity_type=%s entity_id=%s reason=%s skipped=idempotency",
+            _SYSTEM_ACTOR, entity_type, entity_id, reason,
+        )
         return
 
     audience = action.get("audience", "ADMINS")
@@ -218,6 +235,10 @@ def _handle_notify(
         action=audit_action,
         detail=detail,
     ))
+    _logger.info(
+        "actor=%s action=NOTIFY entity_type=%s entity_id=%s reason=%s audience=%s",
+        _SYSTEM_ACTOR, entity_type, entity_id, reason, audience,
+    )
 
 
 def _notification_message(entity_type: str, entity_id: Any, reason: str) -> str:

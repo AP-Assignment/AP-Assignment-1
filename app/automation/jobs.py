@@ -22,6 +22,7 @@ No Flask app context required.
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -35,6 +36,7 @@ from .job_utils import job_session
 
 _DEFAULT_RULE_VERSION = "automation_rules_v1.1"
 _SYSTEM_ACTOR = "system@scheduler"
+_logger = logging.getLogger(__name__)
 
 
 def run_sla_monitoring(
@@ -64,9 +66,27 @@ def run_sla_monitoring(
             select(AccessRequest).where(AccessRequest.status == "pending")
         ).scalars().all()
 
+        _logger.info(
+            "job=sla_monitoring actor=%s entity_type=AccessRequest entity_count=%d",
+            _SYSTEM_ACTOR, len(requests),
+        )
+
+        actions_applied = 0
         for request in requests:
             result = evaluate_request(now, request, entity_type="AccessRequest")
+            if result["actions"]:
+                reasons = [a.get("reason", "") for a in result["actions"]]
+                _logger.info(
+                    "job=sla_monitoring actor=%s entity_type=AccessRequest entity_id=%s state=%s",
+                    _SYSTEM_ACTOR, request.id, ",".join(reasons),
+                )
+                actions_applied += 1
             apply_actions(db, request, result["actions"], now=now, rule_version=rule_version)
+
+        _logger.info(
+            "job=sla_monitoring actor=%s completed evaluated=%d with_actions=%d",
+            _SYSTEM_ACTOR, len(requests), actions_applied,
+        )
 
 
 def run_access_window_monitoring(
@@ -119,6 +139,13 @@ def run_access_window_monitoring(
             )
         ).scalars().all()
 
+        _logger.info(
+            "job=access_window_monitoring actor=%s entity_type=BookingRequest entity_count=%d",
+            _SYSTEM_ACTOR, len(bookings),
+        )
+
+        starting_soon = 0
+        no_shows = 0
         for booking in bookings:
             soon_threshold = booking.start_at - timedelta(minutes=soon_minutes)
 
@@ -134,6 +161,11 @@ def run_access_window_monitoring(
                     ),
                     rule_version=rule_version,
                     now=now,
+                )
+                starting_soon += 1
+                _logger.info(
+                    "job=access_window_monitoring actor=%s entity_id=%s state=starting_soon",
+                    _SYSTEM_ACTOR, booking.id,
                 )
 
             elif now > booking.end_at:
@@ -151,6 +183,17 @@ def run_access_window_monitoring(
                         rule_version=rule_version,
                         now=now,
                     )
+                    no_shows += 1
+                    _logger.info(
+                        "job=access_window_monitoring actor=%s entity_id=%s state=no_show action=NO_SHOW_MARKED",
+                        _SYSTEM_ACTOR, booking.id,
+                    )
+
+        _logger.info(
+            "job=access_window_monitoring actor=%s completed evaluated=%d "
+            "starting_soon=%d no_shows=%d",
+            _SYSTEM_ACTOR, len(bookings), starting_soon, no_shows,
+        )
 
 
 # ---------------------------------------------------------------------------
