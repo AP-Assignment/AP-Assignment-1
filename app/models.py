@@ -224,10 +224,15 @@ class BookingRequest(Base):
     end_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     purpose: Mapped[str] = mapped_column(String(300), nullable=False)
 
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending | approved | rejected | cancelled
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending | approved | rejected | cancelled | expired
     approver_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     decision_note: Mapped[Optional[str]] = mapped_column(String(400), nullable=True)
     decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+
+    # created_at is used by SLA automation (Issue #30) to compute request age.
+    # NOTE: If upgrading an existing SQLite app.db, recreate the database or add
+    # this column manually: ALTER TABLE booking_requests ADD COLUMN created_at DATETIME;
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     cancelled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     checked_in: Mapped[bool] = mapped_column(Boolean, default=False)

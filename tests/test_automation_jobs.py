@@ -18,6 +18,7 @@ from app.models import (
     User,
     AccessRequest,
     AccessRequestStatusHistory,
+    BookingRequest,
 )
 from app.security import hash_password
 from app.automation.jobs import run_sla_monitoring
@@ -87,6 +88,20 @@ def _make_access_request(db, requester_id, status="pending", age_hours=0):
     db.add(ar)
     db.flush()
     return ar
+
+
+def _make_booking_request(db, requester_id, status="pending", age_hours=0):
+    br = BookingRequest(
+        requester_id=requester_id,
+        start_at=_NOW + timedelta(hours=24),
+        end_at=_NOW + timedelta(hours=25),
+        purpose="Test booking",
+        status=status,
+        created_at=_NOW - timedelta(hours=age_hours),
+    )
+    db.add(br)
+    db.flush()
+    return br
 
 
 # ---------------------------------------------------------------------------
@@ -275,3 +290,276 @@ def test_no_flask_context_required(SessionLocal, db):
     _make_access_request(db, user.id, status="pending", age_hours=1)
     db.commit()
     run_sla_monitoring(SessionLocal, now=_NOW)  # should not raise
+
+
+# ===========================================================================
+# BookingRequest SLA automation (Issue #30)
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Under 8 hours: no action
+# ---------------------------------------------------------------------------
+
+def test_booking_request_under_8h_no_action(SessionLocal, db):
+    """A pending BookingRequest under the warning threshold must produce no actions."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=7)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        assert s.execute(select(AuditLog)).scalars().all() == []
+        assert s.execute(select(Notification)).scalars().all() == []
+
+
+# ---------------------------------------------------------------------------
+# At/over 8 hours: SLA warning
+# ---------------------------------------------------------------------------
+
+def test_booking_request_sla_warning_at_8h(SessionLocal, db):
+    """A pending BookingRequest exactly at 8h must produce SLA_WARNING_APPROVAL."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    admin = _make_admin(db, "Admin", "admin@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=8)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        logs = s.execute(select(AuditLog)).scalars().all()
+        assert len(logs) == 1
+        assert "SLA_WARNING_APPROVAL" in logs[0].action
+        assert "BookingRequest" in logs[0].detail
+
+        notifs = s.execute(select(Notification)).scalars().all()
+        assert len(notifs) == 1
+        assert notifs[0].user_id == admin.id
+
+
+def test_booking_request_sla_warning_over_8h(SessionLocal, db):
+    """A pending BookingRequest over 8h (but under 48h) triggers SLA_WARNING_APPROVAL."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    admin = _make_admin(db, "Admin", "admin@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=10)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        logs = s.execute(select(AuditLog)).scalars().all()
+        assert any("SLA_WARNING_APPROVAL" in log.action for log in logs)
+        notifs = s.execute(select(Notification)).scalars().all()
+        assert len(notifs) == 1
+
+
+# ---------------------------------------------------------------------------
+# At/over 48 hours: SLA breach
+# ---------------------------------------------------------------------------
+
+def test_booking_request_sla_breach_at_48h(SessionLocal, db):
+    """A pending BookingRequest exactly at 48h must produce SLA_BREACH_APPROVAL."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    admin = _make_admin(db, "Admin", "admin@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=48)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        logs = s.execute(select(AuditLog)).scalars().all()
+        assert len(logs) == 1
+        assert "SLA_BREACH_APPROVAL" in logs[0].action
+        assert "BookingRequest" in logs[0].detail
+
+        notifs = s.execute(select(Notification)).scalars().all()
+        assert len(notifs) == 1
+        assert notifs[0].user_id == admin.id
+
+
+def test_booking_request_sla_breach_over_48h(SessionLocal, db):
+    """A pending BookingRequest over 48h triggers SLA_BREACH_APPROVAL."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    admin = _make_admin(db, "Admin", "admin@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=50)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        logs = s.execute(select(AuditLog)).scalars().all()
+        assert any("SLA_BREACH_APPROVAL" in log.action for log in logs)
+
+
+# ---------------------------------------------------------------------------
+# At/over 7 days: auto-expire
+# ---------------------------------------------------------------------------
+
+def test_booking_request_auto_expire_at_7d(SessionLocal, db):
+    """A pending BookingRequest exactly at 7 days must be set to 'expired'."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    br = _make_booking_request(db, user.id, status="pending", age_hours=24 * 7)
+    db.commit()
+    br_id = br.id
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        refreshed = s.get(BookingRequest, br_id)
+        assert refreshed.status == "expired"
+
+
+def test_booking_request_auto_expire_writes_audit_and_notification(SessionLocal, db):
+    """Auto-expiry must produce STATUS_CHANGE + NOTIFY audit entries and an admin notification."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    admin = _make_admin(db, "Admin", "admin@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=24 * 8)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        logs = s.execute(select(AuditLog)).scalars().all()
+        assert len(logs) == 2  # STATUS_CHANGE:AUTO_EXPIRE + automation:AUTO_EXPIRE
+        action_types = {log.action for log in logs}
+        assert any("STATUS_CHANGE" in a for a in action_types)
+        assert any("AUTO_EXPIRE" in a for a in action_types)
+
+        notifs = s.execute(select(Notification)).scalars().all()
+        assert len(notifs) == 1
+        assert notifs[0].user_id == admin.id
+
+
+def test_booking_request_auto_expire_no_status_history(SessionLocal, db):
+    """Auto-expiry of BookingRequest must NOT create AccessRequestStatusHistory rows."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=24 * 8)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        assert s.execute(select(AccessRequestStatusHistory)).scalars().all() == []
+
+
+# ---------------------------------------------------------------------------
+# Only pending BookingRequests are processed
+# ---------------------------------------------------------------------------
+
+def test_booking_request_only_pending_processed(SessionLocal, db):
+    """Non-pending BookingRequests must not trigger any SLA actions."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    for status in ("approved", "rejected", "cancelled", "expired"):
+        _make_booking_request(db, user.id, status=status, age_hours=200)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        assert s.execute(select(AuditLog)).scalars().all() == []
+        assert s.execute(select(Notification)).scalars().all() == []
+
+
+# ---------------------------------------------------------------------------
+# Idempotency
+# ---------------------------------------------------------------------------
+
+def test_booking_request_idempotency_sla_warning(SessionLocal, db):
+    """Running run_sla_monitoring twice for BookingRequest SLA warning must not duplicate records."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    admin = _make_admin(db, "Admin", "admin@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=10)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        assert len(s.execute(select(AuditLog)).scalars().all()) == 1
+        assert len(s.execute(select(Notification)).scalars().all()) == 1
+
+
+def test_booking_request_idempotency_auto_expire(SessionLocal, db):
+    """Running run_sla_monitoring twice for BookingRequest auto-expire must not duplicate records."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    admin = _make_admin(db, "Admin", "admin@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=24 * 8)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        assert len(s.execute(select(AuditLog)).scalars().all()) == 2
+        assert len(s.execute(select(Notification)).scalars().all()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Boundary conditions
+# ---------------------------------------------------------------------------
+
+def test_booking_request_boundary_just_under_8h_no_action(SessionLocal, db):
+    """7h59m59s pending -> no action (boundary: just below warning threshold)."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    # 7h 59m 59s = 28799 seconds
+    br = BookingRequest(
+        requester_id=user.id,
+        start_at=_NOW + timedelta(hours=24),
+        end_at=_NOW + timedelta(hours=25),
+        purpose="Boundary test",
+        status="pending",
+        created_at=_NOW - timedelta(seconds=28799),
+    )
+    db.add(br)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        assert s.execute(select(AuditLog)).scalars().all() == []
+
+
+def test_booking_request_boundary_exactly_7d_expires(SessionLocal, db):
+    """Exactly 7 days pending -> AUTO_EXPIRE (boundary condition)."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    br = BookingRequest(
+        requester_id=user.id,
+        start_at=_NOW + timedelta(hours=24),
+        end_at=_NOW + timedelta(hours=25),
+        purpose="Boundary test",
+        status="pending",
+        created_at=_NOW - timedelta(days=7),
+    )
+    db.add(br)
+    db.commit()
+    br_id = br.id
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        refreshed = s.get(BookingRequest, br_id)
+        assert refreshed.status == "expired"
+
+
+# ---------------------------------------------------------------------------
+# AccessRequest and BookingRequest processed in the same run
+# ---------------------------------------------------------------------------
+
+def test_both_entity_types_processed_together(SessionLocal, db):
+    """run_sla_monitoring must process both AccessRequest and BookingRequest in one run."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    admin = _make_admin(db, "Admin", "admin@example.com")
+    _make_access_request(db, user.id, status="pending", age_hours=10)
+    _make_booking_request(db, user.id, status="pending", age_hours=10)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        logs = s.execute(select(AuditLog)).scalars().all()
+        # One SLA_WARNING_APPROVAL audit per entity = 2 total
+        assert len(logs) == 2
+        detail_texts = {log.detail for log in logs}
+        assert any("AccessRequest" in d for d in detail_texts)
+        assert any("BookingRequest" in d for d in detail_texts)
+
