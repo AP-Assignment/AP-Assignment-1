@@ -57,12 +57,13 @@ def test_scheduler_attached_to_app():
 # ---------------------------------------------------------------------------
 
 def test_both_jobs_registered():
-    """'notifications', 'no_show', and 'sla_monitoring' jobs must be present."""
+    """'notifications', 'no_show', 'sla_monitoring', and 'access_window_monitoring' jobs must be present."""
     application = _make_app()
     job_ids = {job.id for job in application.scheduler.get_jobs()}
     assert "notifications" in job_ids
     assert "no_show" in job_ids
     assert "sla_monitoring" in job_ids
+    assert "access_window_monitoring" in job_ids
 
 
 def test_notifications_job_max_instances():
@@ -93,16 +94,16 @@ def test_no_show_job_interval():
 
 
 def test_jobs_coalesce_enabled():
-    """All three jobs must have coalesce=True."""
+    """All four jobs must have coalesce=True."""
     application = _make_app()
-    for job_id in ("notifications", "no_show", "sla_monitoring"):
+    for job_id in ("notifications", "no_show", "sla_monitoring", "access_window_monitoring"):
         assert application.scheduler.get_job(job_id).coalesce is True
 
 
 def test_jobs_misfire_grace_time():
-    """All three jobs must have misfire_grace_time=60."""
+    """All four jobs must have misfire_grace_time=60."""
     application = _make_app()
-    for job_id in ("notifications", "no_show", "sla_monitoring"):
+    for job_id in ("notifications", "no_show", "sla_monitoring", "access_window_monitoring"):
         assert application.scheduler.get_job(job_id).misfire_grace_time == 60
 
 

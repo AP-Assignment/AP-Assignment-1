@@ -9,6 +9,14 @@ rule engine, and applies any resulting actions through the action handler.
 Issue #25: Monitors booking windows for approved BookingRequests, detecting
 starting-soon, active, and missed states, and records audit events.
 
+Concurrency safety (Issue #26)
+-------------------------------
+Both jobs use ``job_session`` from ``job_utils`` to obtain a single
+short-lived session per execution.  AuditLog-based idempotency guards
+prevent duplicate writes if the same job fires more than once for the same
+entity (e.g. due to a process restart or overlapping test runs).  See
+``app/automation/job_utils.py`` for the full concurrency strategy.
+
 No Flask app context required.
 """
 
@@ -23,6 +31,7 @@ from sqlalchemy.orm import Session
 from ..models import AccessRequest, AuditLog, BookingRequest, Notification, User
 from .rules import evaluate_request
 from .actions import apply_actions
+from .job_utils import job_session
 
 _DEFAULT_RULE_VERSION = "automation_rules_v1.1"
 _SYSTEM_ACTOR = "system@scheduler"
@@ -50,8 +59,7 @@ def run_sla_monitoring(
     if now is None:
         now = datetime.utcnow()
 
-    db = SessionLocal()
-    try:
+    with job_session(SessionLocal, job_name="sla_monitoring") as db:
         requests = db.execute(
             select(AccessRequest).where(AccessRequest.status == "pending")
         ).scalars().all()
@@ -59,13 +67,6 @@ def run_sla_monitoring(
         for request in requests:
             result = evaluate_request(now, request, entity_type="AccessRequest")
             apply_actions(db, request, result["actions"], now=now, rule_version=rule_version)
-
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
 
 
 def run_access_window_monitoring(
@@ -109,8 +110,7 @@ def run_access_window_monitoring(
 
     horizon = timedelta(hours=24)
 
-    db = SessionLocal()
-    try:
+    with job_session(SessionLocal, job_name="access_window_monitoring") as db:
         bookings = db.execute(
             select(BookingRequest).where(
                 BookingRequest.status == "approved",
@@ -151,13 +151,6 @@ def run_access_window_monitoring(
                         rule_version=rule_version,
                         now=now,
                     )
-
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
 
 
 # ---------------------------------------------------------------------------
