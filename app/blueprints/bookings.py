@@ -9,7 +9,7 @@ from datetime import datetime
 from flask import Blueprint, render_template, redirect, url_for, flash, current_app
 from flask_login import login_required, current_user
 from sqlalchemy import select
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 from ..forms import BookingForm
 from ..models import Machine, BookingRequest, BookingItem, User, AuditLog, AccessRequest
 from ..services.booking_rules import validate_booking_window, machines_exist_and_available
@@ -24,7 +24,8 @@ def my_bookings():
         bookings = db.execute(
             select(BookingRequest)
             .options(
-                selectinload(BookingRequest.items).selectinload(BookingItem.machine)
+                selectinload(BookingRequest.items).selectinload(BookingItem.machine),
+                joinedload(BookingRequest.access_request),
             )
             .where(BookingRequest.requester_id == current_user.id)
             .order_by(BookingRequest.start_at.desc())

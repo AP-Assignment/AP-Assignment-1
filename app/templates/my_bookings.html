@@ -17,6 +17,7 @@
             <th>ID</th>
             <th>Window (UTC)</th>
             <th>Status</th>
+            <th>Access</th>
             <th>Machines</th>
             <th>No-show</th>
             <th class="text-end">Actions</th>
@@ -39,6 +40,19 @@
                 <span class="badge bg-{{ colour }}">{{ b.status }}</span>
                 {% if b.decision_note %}
                   <div class="text-muted small mt-1">{{ b.decision_note }}</div>
+                {% endif %}
+              </td>
+              <td>
+                {% if b.access_request %}
+                  {% if b.access_request.status == "approved" %}
+                    <span title="Access approved" style="color:#28a745;font-weight:bold;">✓</span>
+                  {% elif b.access_request.status == "rejected" %}
+                    <span title="Access rejected" style="color:#dc3545;font-weight:bold;">✗</span>
+                  {% elif b.access_request.status == "pending" %}
+                    <span title="Access pending" style="color:#ffc107;font-weight:bold;">...</span>
+                  {% elif b.access_request.status == "expired" %}
+                    <span title="Access expired" style="color:#6c757d;">🕒</span>
+                  {% endif %}
                 {% endif %}
               </td>
               <td class="small">
@@ -70,7 +84,7 @@
               </td>
             </tr>
           {% else %}
-            <tr><td colspan="6" class="text-muted">No bookings yet.</td></tr>
+            <tr><td colspan="7" class="text-muted">No bookings yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>
