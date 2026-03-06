@@ -101,6 +101,23 @@ def dashboard():
             .limit(100)
         ).scalars().all()
 
+        # Access requests pending approval: only show those whose linked booking
+        # is approved (approval ordering enforcement – issue #46).
+        pending_access_requests = db.execute(
+            select(AccessRequest)
+            .join(BookingRequest, AccessRequest.booking_request_id == BookingRequest.id)
+            .options(
+                selectinload(AccessRequest.requester),
+                selectinload(AccessRequest.booking_request),
+            )
+            .where(
+                AccessRequest.status == "pending",
+                BookingRequest.status == "approved",
+            )
+            .order_by(AccessRequest.created_at.asc())
+            .limit(100)
+        ).scalars().all()
+
     return render_template(
         "admin_dashboard.html",
         util=util,
@@ -113,6 +130,7 @@ def dashboard():
         ar_sla_breach=ar_sla_breach,
         ar_expired=ar_expired,
         pending_bookings=pending_bookings,
+        pending_access_requests=pending_access_requests,
         status=status,
     )
 
@@ -212,8 +230,104 @@ def reject_booking(booking_id: int):
         b.decided_at = datetime.utcnow()
         db.add(AuditLog(actor_email=current_user.email, action="booking_reject", detail=f"Rejected booking #{b.id}"))
         queue_notification(db, b.requester_id, f"Booking #{b.id} rejected: {b.decision_note}")
+
+        # Cascading rejection: auto-reject any linked pending AccessRequest.
+        ar = db.execute(
+            select(AccessRequest)
+            .where(AccessRequest.booking_request_id == b.id, AccessRequest.status == "pending")
+        ).scalar_one_or_none()
+        if ar:
+            ar.status = "rejected"
+            ar.resolved_by_id = current_user.id
+            ar.resolved_at = datetime.utcnow()
+            ar.updated_at = datetime.utcnow()
+            ar.decision_note = f"Auto-rejected: linked booking #{b.id} was rejected."
+            db.add(AuditLog(
+                actor_email=current_user.email,
+                action="access_request_auto_rejected_due_to_booking_rejection",
+                detail=f"access_request_id={ar.id}, booking_id={b.id}",
+            ))
+            queue_notification(
+                db, ar.requester_id,
+                f"Access request #{ar.id} auto-rejected because booking #{b.id} was rejected.",
+            )
+
         db.commit()
     flash("Booking rejected.", "info")
+    return redirect(url_for("admin.dashboard"))
+
+
+@bp.post("/access-request/<int:ar_id>/approve")
+@login_required
+def approve_access_request(ar_id: int):
+    if not _require({"approver", "admin"}):
+        return redirect(url_for("admin.dashboard"))
+    with current_app.session_factory() as db:
+        ar = db.execute(
+            select(AccessRequest).where(AccessRequest.id == ar_id)
+        ).scalar_one_or_none()
+        if not ar or ar.status != "pending":
+            flash("Access request not found or not pending.", "warning")
+            return redirect(url_for("admin.dashboard"))
+
+        # Approval ordering: linked booking must be approved first.
+        if ar.booking_request_id is not None:
+            booking = db.get(BookingRequest, ar.booking_request_id)
+            if not booking or booking.status != "approved":
+                flash(
+                    "Cannot approve access request: the linked booking has not been approved yet.",
+                    "danger",
+                )
+                return redirect(url_for("admin.dashboard"))
+
+        ar.status = "approved"
+        ar.resolved_by_id = current_user.id
+        ar.resolved_at = datetime.utcnow()
+        ar.updated_at = datetime.utcnow()
+        ar.decision_note = "Approved"
+        db.add(AuditLog(
+            actor_email=current_user.email,
+            action="access_request_approved",
+            detail=f"access_request_id={ar.id}, booking_id={ar.booking_request_id}",
+        ))
+        queue_notification(db, ar.requester_id, f"Access request #{ar.id} has been approved.")
+        db.commit()
+
+    flash("Access request approved.", "success")
+    return redirect(url_for("admin.dashboard"))
+
+
+@bp.post("/access-request/<int:ar_id>/reject")
+@login_required
+def reject_access_request(ar_id: int):
+    if not _require({"approver", "admin"}):
+        return redirect(url_for("admin.dashboard"))
+    note = (request.form.get("note") or "").strip()[:300]
+    with current_app.session_factory() as db:
+        ar = db.execute(
+            select(AccessRequest).where(AccessRequest.id == ar_id)
+        ).scalar_one_or_none()
+        if not ar or ar.status != "pending":
+            flash("Access request not found or not pending.", "warning")
+            return redirect(url_for("admin.dashboard"))
+
+        ar.status = "rejected"
+        ar.resolved_by_id = current_user.id
+        ar.resolved_at = datetime.utcnow()
+        ar.updated_at = datetime.utcnow()
+        ar.decision_note = note or "Rejected"
+        db.add(AuditLog(
+            actor_email=current_user.email,
+            action="access_request_rejected",
+            detail=f"access_request_id={ar.id}, booking_id={ar.booking_request_id}",
+        ))
+        queue_notification(
+            db, ar.requester_id,
+            f"Access request #{ar.id} rejected: {ar.decision_note}",
+        )
+        db.commit()
+
+    flash("Access request rejected.", "info")
     return redirect(url_for("admin.dashboard"))
 
 @bp.get("/export/bookings.csv")

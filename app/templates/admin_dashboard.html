@@ -141,6 +141,52 @@
       </div>
 
       <div class="card p-3 mt-3">
+        <div class="fw-semibold mb-2">Access request approvals <span class="text-muted small fw-normal">— pending, booking approved</span></div>
+        <div class="table-responsive">
+          <table class="table table-dark table-hover align-middle mb-0">
+            <thead>
+              <tr>
+                <th>AR ID</th>
+                <th>Booking ID</th>
+                <th>Requester</th>
+                <th>Created (UTC)</th>
+                <th>Status</th>
+                <th class="text-end">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for ar in pending_access_requests %}
+                <tr>
+                  <td>#{{ ar.id }}</td>
+                  <td>{% if ar.booking_request %}#{{ ar.booking_request.id }}{% else %}—{% endif %}</td>
+                  <td class="small">
+                    <div>{{ ar.requester.email }}</div>
+                    <div class="text-muted">{{ ar.requester.team }}</div>
+                  </td>
+                  <td class="small">{{ ar.created_at.strftime("%Y-%m-%d %H:%M") }}</td>
+                  <td><span class="badge tm-pill">{{ ar.status }}</span></td>
+                  <td class="text-end">
+                    <form method="post" action="{{ url_for('admin.approve_access_request', ar_id=ar.id) }}" class="d-inline">
+                      <button class="btn btn-sm btn-success">Approve</button>
+                    </form>
+                    <button class="btn btn-sm btn-outline-light" data-bs-toggle="collapse" data-bs-target="#ar_rej{{ ar.id }}">Reject</button>
+                    <div class="collapse mt-2" id="ar_rej{{ ar.id }}">
+                      <form method="post" action="{{ url_for('admin.reject_access_request', ar_id=ar.id) }}">
+                        <input class="form-control form-control-sm" name="note" placeholder="Reason (optional)">
+                        <button class="btn btn-sm btn-danger mt-2">Confirm reject</button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+              {% else %}
+                <tr><td colspan="6" class="text-muted">No access requests awaiting approval.</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="card p-3 mt-3">
         <div class="fw-semibold">Upcoming bookings (next 50)</div>
         <div class="table-responsive mt-3">
           <table class="table table-dark table-hover align-middle mb-0">

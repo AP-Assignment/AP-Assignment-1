@@ -20,6 +20,7 @@ Relationship map (→ = FK / many-to-one, ↔ = bidirectional):
   User          1 ↔ N  Assignment        as owner     (user.owned_assignments / assignment.owner)
   User          1 ↔ N  AssignmentApprover (user.assignment_approver_roles / assignment_approver.approver)
   BookingRequest 1 ↔ N  BookingItem      (booking.items / booking_item.booking)
+  BookingRequest 1 ↔ 1  AccessRequest    (booking.access_request / access_request.booking_request)
   Machine        1 ↔ N  BookingItem      (machine.booking_items / booking_item.machine)
   Assignment     1 ↔ N  AssignmentApprover (assignment.approvers / assignment_approver.assignment)
   Assignment     1 ↔ N  AccessRequest    (assignment.access_requests / access_request.assignment_ref)
@@ -244,6 +245,10 @@ class BookingRequest(Base):
     # cascade="all, delete-orphan" so that cancelling/deleting a booking also
     # removes its line items (BookingItem rows) atomically.
     items: Mapped[List["BookingItem"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
+    # 1:1 optional link to an AccessRequest created from this booking.
+    access_request: Mapped[Optional["AccessRequest"]] = relationship(
+        back_populates="booking_request", uselist=False
+    )
 
 
 class BookingItem(Base):
@@ -323,6 +328,9 @@ class AccessRequest(Base):
       tied to a specific site.
     - ``assignment_id`` is nullable for backward compatibility with requests
       created before the Assignment model was introduced.
+    - ``booking_request_id`` is nullable for access requests not originating
+      from a booking. The unique constraint enforces at most one AccessRequest
+      per BookingRequest (1:1 link).
     - Approval metadata (resolved_by_id, resolved_at, decision_note) follows
       the same pattern as BookingRequest: a single optional decision captured
       inline to avoid a separate 1:1 table.
@@ -332,11 +340,19 @@ class AccessRequest(Base):
     """
 
     __tablename__ = "access_requests"
+    __table_args__ = (
+        # Enforce at most one AccessRequest per BookingRequest (1:1 link).
+        UniqueConstraint("booking_request_id", name="uq_access_request_booking"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     requester_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
     site_id: Mapped[Optional[int]] = mapped_column(ForeignKey("sites.id"), nullable=True)
     assignment_id: Mapped[Optional[int]] = mapped_column(ForeignKey("assignments.id"), nullable=True)
+    # FK to the BookingRequest that triggered this access request (1:1, optional).
+    booking_request_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("booking_requests.id"), nullable=True
+    )
     # Human-readable description of the assignment/project; captured at
     # request time for readability independent of the Assignment record.
     assignment: Mapped[str] = mapped_column(String(300), nullable=False)
@@ -359,6 +375,9 @@ class AccessRequest(Base):
     site: Mapped[Optional["Site"]] = relationship(back_populates="access_requests")
     assignment_ref: Mapped[Optional["Assignment"]] = relationship(
         back_populates="access_requests", foreign_keys=[assignment_id]
+    )
+    booking_request: Mapped[Optional["BookingRequest"]] = relationship(
+        back_populates="access_request", foreign_keys=[booking_request_id]
     )
     # Ordered by changed_at so that history[0] is always the earliest entry.
     # cascade="all, delete-orphan" keeps history in sync with the request.

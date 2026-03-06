@@ -70,34 +70,33 @@ def new_booking():
             for mid in ids:
                 db.add(BookingItem(booking_id=booking.id, machine_id=mid))
 
-            # Create AccessRequest(s) only when selection contains lab machines
-            # and the user explicitly requested site access (anti-spoofing enforced server-side)
-            access_request_ids = []
+            # Create AccessRequest only when selection contains lab machines
+            # and the user explicitly requested site access (anti-spoofing enforced server-side).
+            # Issue #46: 1:1 link – one AccessRequest per BookingRequest. For multi-site bookings
+            # all site names are captured in the description; site_id is set to the first lab site.
             if form.request_access.data and contains_lab:
                 lab_machines = [m for m in selected_machines if m.machine_type == "lab"]
-                # Group lab machines by site; create one AccessRequest per site
-                sites_seen: dict[int, str] = {}
-                for m in lab_machines:
-                    if m.site_id not in sites_seen:
-                        sites_seen[m.site_id] = m.site.city
-                for site_id, site_city in sites_seen.items():
-                    ar = AccessRequest(
-                        requester_id=current_user.id,
-                        site_id=site_id,
-                        assignment=f"Booking #{booking.id} – site access for {site_city}",
-                        status="pending",
-                    )
-                    db.add(ar)
-                    db.flush()
-                    access_request_ids.append(ar.id)
-                    db.add(AuditLog(
-                        actor_email=current_user.email,
-                        action="access_request_created_from_booking",
-                        detail=(
-                            f"booking_id={booking.id}, access_request_id={ar.id}, "
-                            f"machine_ids={ids}, contains_lab={contains_lab}, site_id={site_id}"
-                        ),
-                    ))
+                site_ids = list(dict.fromkeys(m.site_id for m in lab_machines))
+                site_city_names = ", ".join(
+                    dict.fromkeys(m.site.city for m in lab_machines)
+                )
+                ar = AccessRequest(
+                    requester_id=current_user.id,
+                    site_id=site_ids[0],
+                    booking_request_id=booking.id,
+                    assignment=f"Booking #{booking.id} – site access for {site_city_names}",
+                    status="pending",
+                )
+                db.add(ar)
+                db.flush()
+                db.add(AuditLog(
+                    actor_email=current_user.email,
+                    action="access_request_created_from_booking",
+                    detail=(
+                        f"booking_id={booking.id}, access_request_id={ar.id}, "
+                        f"machine_ids={ids}, contains_lab={contains_lab}, site_ids={site_ids}"
+                    ),
+                ))
 
             approvers = db.execute(select(User).where(User.role.in_(["approver", "admin"]), User.status == "active")).scalars().all()
             for a in approvers:

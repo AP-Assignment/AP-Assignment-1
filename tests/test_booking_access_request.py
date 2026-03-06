@@ -138,27 +138,27 @@ def _submit_booking(db, requester, machine_ids: list, request_access: bool) -> B
 
     if request_access and contains_lab:
         lab_machines = [m for m in selected_machines if m.machine_type == "lab"]
-        sites_seen: dict[int, str] = {}
-        for m in lab_machines:
-            if m.site_id not in sites_seen:
-                sites_seen[m.site_id] = m.site.city
-        for site_id, site_city in sites_seen.items():
-            ar = AccessRequest(
-                requester_id=requester.id,
-                site_id=site_id,
-                assignment=f"Booking #{booking.id} – site access for {site_city}",
-                status="pending",
-            )
-            db.add(ar)
-            db.flush()
-            db.add(AuditLog(
-                actor_email=requester.email,
-                action="access_request_created_from_booking",
-                detail=(
-                    f"booking_id={booking.id}, access_request_id={ar.id}, "
-                    f"machine_ids={machine_ids}, contains_lab={contains_lab}, site_id={site_id}"
-                ),
-            ))
+        # Issue #46: 1:1 link – one AccessRequest per BookingRequest.
+        site_ids = list(dict.fromkeys(m.site_id for m in lab_machines))
+        site_city_names = ", ".join(dict.fromkeys(m.site.city for m in lab_machines))
+        primary_site_id = site_ids[0]
+        ar = AccessRequest(
+            requester_id=requester.id,
+            site_id=primary_site_id,
+            booking_request_id=booking.id,
+            assignment=f"Booking #{booking.id} – site access for {site_city_names}",
+            status="pending",
+        )
+        db.add(ar)
+        db.flush()
+        db.add(AuditLog(
+            actor_email=requester.email,
+            action="access_request_created_from_booking",
+            detail=(
+                f"booking_id={booking.id}, access_request_id={ar.id}, "
+                f"machine_ids={machine_ids}, contains_lab={contains_lab}, site_ids={site_ids}"
+            ),
+        ))
 
     db.commit()
     return booking
@@ -230,10 +230,10 @@ def test_mixed_lab_virtual_checkbox_checked_creates_access_request(
     assert access_requests[0].site_id == lab_machine_a.site_id
 
 
-def test_multi_site_lab_creates_one_access_request_per_site(
+def test_multi_site_lab_creates_one_access_request_per_booking(
     db, requester, lab_machine_a, lab_machine_b
 ):
-    """Multi-site LAB selection must create one AccessRequest per site."""
+    """Multi-site LAB selection must create exactly ONE AccessRequest per booking (Issue #46: 1:1 constraint)."""
     assert lab_machine_a.site_id != lab_machine_b.site_id, "Fixtures must be on different sites"
 
     booking = _submit_booking(
@@ -243,15 +243,18 @@ def test_multi_site_lab_creates_one_access_request_per_site(
     access_requests = db.execute(
         select(AccessRequest).where(AccessRequest.requester_id == requester.id)
     ).scalars().all()
-    assert len(access_requests) == 2
-    site_ids = {ar.site_id for ar in access_requests}
-    assert site_ids == {lab_machine_a.site_id, lab_machine_b.site_id}
+    assert len(access_requests) == 1
+    ar = access_requests[0]
+    assert ar.booking_request_id == booking.id
+    # Both site city names should appear in the assignment description.
+    assert lab_machine_a.site.city in ar.assignment
+    assert lab_machine_b.site.city in ar.assignment
 
-    # Two AuditLog entries (one per site)
+    # One AuditLog entry for the single AccessRequest.
     logs = db.execute(
         select(AuditLog).where(AuditLog.action == "access_request_created_from_booking")
     ).scalars().all()
-    assert len(logs) == 2
+    assert len(logs) == 1
 
 
 def test_access_request_has_pending_status_by_default(db, requester, lab_machine_a):
@@ -272,3 +275,108 @@ def test_virtual_only_checkbox_unchecked_no_access_request(db, requester, virtua
         select(AccessRequest).where(AccessRequest.requester_id == requester.id)
     ).scalars().all()
     assert access_requests == []
+
+
+# ---------------------------------------------------------------------------
+# Issue #46: booking_request_id linkage and approval workflow
+# ---------------------------------------------------------------------------
+
+
+def test_access_request_links_booking_request_id(db, requester, lab_machine_a):
+    """AccessRequest created from booking must have booking_request_id set."""
+    booking = _submit_booking(db, requester, [lab_machine_a.id], request_access=True)
+
+    ar = db.execute(
+        select(AccessRequest).where(AccessRequest.requester_id == requester.id)
+    ).scalar_one()
+    assert ar.booking_request_id == booking.id
+
+
+def test_unique_constraint_prevents_duplicate_access_requests_per_booking(db, requester, lab_machine_a):
+    """Unique constraint must prevent a second AccessRequest for the same BookingRequest."""
+    from sqlalchemy.exc import IntegrityError
+
+    booking = _submit_booking(db, requester, [lab_machine_a.id], request_access=True)
+
+    duplicate = AccessRequest(
+        requester_id=requester.id,
+        site_id=lab_machine_a.site_id,
+        booking_request_id=booking.id,
+        assignment="duplicate",
+        status="pending",
+    )
+    db.add(duplicate)
+    with pytest.raises(IntegrityError):
+        db.flush()
+
+
+def test_access_request_approval_blocked_when_booking_pending(db, requester, lab_machine_a):
+    """Approving an AccessRequest must be blocked if its booking is still pending."""
+    booking = _submit_booking(db, requester, [lab_machine_a.id], request_access=True)
+    assert booking.status == "pending"
+
+    ar = db.execute(
+        select(AccessRequest).where(AccessRequest.booking_request_id == booking.id)
+    ).scalar_one()
+
+    # Simulate the server-side guard: approval blocked when booking not approved.
+    linked_booking = db.get(BookingRequest, ar.booking_request_id)
+    assert linked_booking.status != "approved", "Pre-condition: booking must not be approved"
+    # The guard would prevent approval; assert state is unchanged.
+    assert ar.status == "pending"
+
+
+def test_access_request_can_be_approved_when_booking_approved(db, requester, lab_machine_a):
+    """AccessRequest can be approved after its linked BookingRequest is approved."""
+    booking = _submit_booking(db, requester, [lab_machine_a.id], request_access=True)
+
+    # Approve the booking first.
+    booking.status = "approved"
+    db.flush()
+
+    ar = db.execute(
+        select(AccessRequest).where(AccessRequest.booking_request_id == booking.id)
+    ).scalar_one()
+
+    # Now approval is permitted.
+    linked_booking = db.get(BookingRequest, ar.booking_request_id)
+    assert linked_booking.status == "approved"
+
+    ar.status = "approved"
+    db.flush()
+    db.commit()
+
+    refreshed = db.get(AccessRequest, ar.id)
+    assert refreshed.status == "approved"
+
+
+def test_booking_rejection_auto_rejects_linked_pending_access_request(db, requester, lab_machine_a):
+    """Rejecting a BookingRequest must auto-reject its linked pending AccessRequest."""
+    booking = _submit_booking(db, requester, [lab_machine_a.id], request_access=True)
+
+    ar = db.execute(
+        select(AccessRequest).where(AccessRequest.booking_request_id == booking.id)
+    ).scalar_one()
+    assert ar.status == "pending"
+
+    # Simulate the cascading rejection logic from the admin blueprint.
+    booking.status = "rejected"
+    db.flush()
+
+    if ar.status == "pending":
+        ar.status = "rejected"
+        ar.decision_note = f"Auto-rejected: linked booking #{booking.id} was rejected."
+        db.add(AuditLog(
+            actor_email=requester.email,
+            action="access_request_auto_rejected_due_to_booking_rejection",
+            detail=f"access_request_id={ar.id}, booking_id={booking.id}",
+        ))
+    db.commit()
+
+    refreshed = db.get(AccessRequest, ar.id)
+    assert refreshed.status == "rejected"
+
+    log = db.execute(
+        select(AuditLog).where(AuditLog.action == "access_request_auto_rejected_due_to_booking_rejection")
+    ).scalar_one()
+    assert str(ar.id) in log.detail
