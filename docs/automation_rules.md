@@ -60,26 +60,12 @@ To avoid ambiguity, each rule in this document is labelled as one of:
 **Audit expectation (recommended):**
 - Dispatch actions MAY be audited, but are not required for SLA evidence (message-level persistence already exists).
 
-### 3.2 Booking No-Show Detection (IMPLEMENTED)
+### 3.2 Booking No-Show Detection (superseded by Issue #31)
 **Entity:** `BookingRequest`
 
-A booking is considered a **no-show** when all are true:
-- `status == "approved"`
-- `end_at < (now_utc - 15 minutes)`
-- `checked_in == false`
-- `no_show == false`
-
-**Action:**
-- set `no_show = true`
-- queue a notification to the requester: *"No-show recorded for booking #{id}..."*
-
-**Idempotency / de-duplication:**
-- A booking is only marked once because the rule only applies when `no_show == false`.
-
-**Audit (recommended):**
-- When a booking transitions to `no_show=true`, an audit event SHOULD be recorded (see Section 9).
-
-> **Note — threshold difference vs. Issue #31 (PLANNED):** The current implementation triggers no-show detection 15 minutes *after `end_at`*. Issue #31 targets a stricter rule: no-show is detected 5 minutes *after `start_at`* (see Section 4.3). The planned rule will replace this implementation once validated.
+> **This rule has been superseded by the Issue #31 implementation (Section 4.3).** No-show marking
+> is now performed by `run_access_window_monitoring` using the 5-minute-after-`start_at` trigger.
+> `mark_no_shows` is retained as a registered scheduler stub but performs no database writes.
 
 ---
 
@@ -117,7 +103,7 @@ A booking approval is considered overdue when a `BookingRequest` with `status ==
 
 **Idempotency:** each warning, breach and expiry action is emitted at most once per request (see Section 9).
 
-### 4.3 BookingRequest No-Show Automation (PLANNED) — Issue #31
+### 4.3 BookingRequest No-Show Automation (IMPLEMENTED) — Issue #31
 **Entity:** `BookingRequest`
 
 A booking is considered a **no-show** when the user does not check in within the grace period after the booking start time.
@@ -136,7 +122,10 @@ A booking is considered a **no-show** when the user does not check in within the
 **Idempotency / de-duplication:**
 - The rule is a no-op when `no_show == true` or `checked_in == true`; no duplicate actions can occur.
 
-> **Threshold change from current implementation (Section 3.2):** The current implementation fires 15 minutes *after `end_at`*; this planned rule fires 5 minutes *after `start_at`*. The earlier trigger ensures no-shows are recorded promptly.
+**Implemented in** `run_access_window_monitoring` (`app/automation/jobs.py`). The legacy
+`mark_no_shows` stub is retained but performs no writes.
+
+> **Threshold change from prior implementation (Section 3.2):** The prior implementation fired 15 minutes *after `end_at`*; this rule fires 5 minutes *after `start_at`*, ensuring no-shows are recorded promptly.
 
 ---
 
@@ -401,7 +390,7 @@ This preserves audit traceability without requiring schema redesign.
 - [x] Document version bumped to `automation_rules_v1.1`
 - [x] Current implemented no-show rule (Section 3.2) notes threshold difference vs. Issue #31 target
 - [x] BookingRequest approval SLA automation documented (Issue #30): warn/breach thresholds and `status="expired"` auto-expiry
-- [x] BookingRequest no-show automation documented (Issue #31): `no_show=true` if not checked-in within 5 minutes after `start_at`
+- [x] BookingRequest no-show automation documented and **IMPLEMENTED** (Issue #31): `no_show=true` if not checked-in within 5 minutes after `start_at`
 - [x] Idempotency/de-duplication expectations documented for BookingRequest SLA and no-show rules
 - [x] Boundary conditions listed for testability (Section 7.2)
 

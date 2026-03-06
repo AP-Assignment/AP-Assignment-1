@@ -121,6 +121,9 @@ def run_sla_monitoring(
         )
 
 
+_NO_SHOW_GRACE_MINUTES = 5
+
+
 def run_access_window_monitoring(
     SessionLocal,
     *,
@@ -134,10 +137,10 @@ def run_access_window_monitoring(
     - **Starting soon**: ``start_at - soon_minutes <= now < start_at``
       → audit action ``automation:BOOKING_WINDOW_STARTING_SOON``
       → user notification
-    - **Active**: ``start_at <= now <= end_at``
-      → no action; booking is in progress.
-    - **Missed / no-show**: ``now > end_at`` and not checked-in and not already
-      marked no-show → sets ``no_show = True``,
+    - **Grace period**: ``start_at <= now <= start_at + 5 minutes``
+      → no action; user still has time to check in.
+    - **No-show** (Issue #31): ``now > start_at + 5 minutes`` and not
+      checked-in and not already marked no-show → sets ``no_show = True``,
       → audit action ``automation:NO_SHOW_MARKED``
       → user notification
 
@@ -180,6 +183,7 @@ def run_access_window_monitoring(
         no_shows = 0
         for booking in bookings:
             soon_threshold = booking.start_at - timedelta(minutes=soon_minutes)
+            no_show_threshold = booking.start_at + timedelta(minutes=_NO_SHOW_GRACE_MINUTES)
 
             if soon_threshold <= now < booking.start_at:
                 # Starting-soon window
@@ -200,8 +204,8 @@ def run_access_window_monitoring(
                     _SYSTEM_ACTOR, booking.id,
                 )
 
-            elif now > booking.end_at:
-                # Window has passed
+            elif now > no_show_threshold:
+                # Grace period has elapsed since start_at (Issue #31)
                 if not booking.checked_in and not booking.no_show:
                     booking.no_show = True
                     _ensure_booking_audit(
