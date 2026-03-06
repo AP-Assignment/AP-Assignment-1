@@ -11,7 +11,7 @@ from flask_login import login_required, current_user
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from ..forms import BookingForm
-from ..models import Machine, BookingRequest, BookingItem, User, AuditLog
+from ..models import Machine, BookingRequest, BookingItem, User, AuditLog, AccessRequest
 from ..services.booking_rules import validate_booking_window, machines_exist_and_available
 from ..services.notifications import queue_notification
 
@@ -38,18 +38,24 @@ def new_booking():
     with current_app.session_factory() as db:
         machines = db.execute(select(Machine).where(Machine.status == "available").order_by(Machine.name)).scalars().all()
         form.machines.choices = [(m.id, f"{m.name} • {m.machine_type.upper()} • {m.site.city}") for m in machines]
+        # Mapping exposed to the template for JS-driven checkbox visibility
+        machine_type_map = {m.id: m.machine_type for m in machines}
 
         if form.validate_on_submit():
             ok, msg = validate_booking_window(form.start_at.data, form.end_at.data)
             if not ok:
                 flash(msg, "warning")
-                return render_template("new_booking.html", form=form)
+                return render_template("new_booking.html", form=form, machine_type_map=machine_type_map)
 
             ids = list(dict.fromkeys(form.machines.data))
             ok2, msg2 = machines_exist_and_available(db, ids)
             if not ok2:
                 flash(msg2, "warning")
-                return render_template("new_booking.html", form=form)
+                return render_template("new_booking.html", form=form, machine_type_map=machine_type_map)
+
+            # Re-fetch selected machines to determine lab/site membership (anti-spoofing)
+            selected_machines = db.execute(select(Machine).where(Machine.id.in_(ids))).scalars().all()
+            contains_lab = any(m.machine_type == "lab" for m in selected_machines)
 
             booking = BookingRequest(
                 requester_id=current_user.id,
@@ -64,6 +70,35 @@ def new_booking():
             for mid in ids:
                 db.add(BookingItem(booking_id=booking.id, machine_id=mid))
 
+            # Create AccessRequest(s) only when selection contains lab machines
+            # and the user explicitly requested site access (anti-spoofing enforced server-side)
+            access_request_ids = []
+            if form.request_access.data and contains_lab:
+                lab_machines = [m for m in selected_machines if m.machine_type == "lab"]
+                # Group lab machines by site; create one AccessRequest per site
+                sites_seen: dict[int, str] = {}
+                for m in lab_machines:
+                    if m.site_id not in sites_seen:
+                        sites_seen[m.site_id] = m.site.city
+                for site_id, site_city in sites_seen.items():
+                    ar = AccessRequest(
+                        requester_id=current_user.id,
+                        site_id=site_id,
+                        assignment=f"Booking #{booking.id} – site access for {site_city}",
+                        status="pending",
+                    )
+                    db.add(ar)
+                    db.flush()
+                    access_request_ids.append(ar.id)
+                    db.add(AuditLog(
+                        actor_email=current_user.email,
+                        action="access_request_created_from_booking",
+                        detail=(
+                            f"booking_id={booking.id}, access_request_id={ar.id}, "
+                            f"machine_ids={ids}, contains_lab={contains_lab}, site_id={site_id}"
+                        ),
+                    ))
+
             approvers = db.execute(select(User).where(User.role.in_(["approver", "admin"]), User.status == "active")).scalars().all()
             for a in approvers:
                 queue_notification(db, a.id, f"New booking request #{booking.id} awaiting approval.")
@@ -74,7 +109,7 @@ def new_booking():
             flash("Booking request submitted for approval.", "success")
             return redirect(url_for("bookings.my_bookings"))
 
-    return render_template("new_booking.html", form=form)
+    return render_template("new_booking.html", form=form, machine_type_map=machine_type_map)
 
 @bp.post("/cancel/<int:booking_id>")
 @login_required

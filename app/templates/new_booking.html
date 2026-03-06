@@ -27,9 +27,15 @@
             </div>
             <div class="col-12">
               {{ form.machines.label(class_="form-label") }}
-              {{ form.machines(class_="form-select", size="10") }}
+              {{ form.machines(class_="form-select", size="10", id="machines-select") }}
               <div class="text-muted small mt-1">Tip: hold Ctrl (Windows) / Cmd (Mac) to select multiple.</div>
               {% for e in form.machines.errors %}<div class="text-warning small">{{ e }}</div>{% endfor %}
+            </div>
+            <div class="col-12" id="access-request-row" style="display:none;">
+              <div class="form-check">
+                {{ form.request_access(class_="form-check-input", id="request-access-check") }}
+                {{ form.request_access.label(class_="form-check-label", for="request-access-check") }}
+              </div>
             </div>
             <div class="col-12">
               {{ form.purpose.label(class_="form-label") }}
@@ -47,4 +53,27 @@
     </div>
   </div>
 </div>
+
+<script>
+(function () {
+  var machineTypeMap = {{ machine_type_map | tojson }};
+  var select = document.getElementById("machines-select");
+  var row = document.getElementById("access-request-row");
+  var checkbox = document.getElementById("request-access-check");
+
+  function updateVisibility() {
+    var selectedOptions = Array.from(select.selectedOptions);
+    var hasLab = selectedOptions.some(function (opt) {
+      return machineTypeMap[parseInt(opt.value)] === "lab";
+    });
+    row.style.display = hasLab ? "" : "none";
+    if (!hasLab) {
+      checkbox.checked = false;
+    }
+  }
+
+  select.addEventListener("change", updateVisibility);
+  updateVisibility();
+})();
+</script>
 {% endblock %}

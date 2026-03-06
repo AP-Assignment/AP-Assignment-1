@@ -6,7 +6,7 @@ Created on Tue Jan 13 14:13:55 2026
 """
 
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, SubmitField, DateTimeLocalField, TextAreaField, SelectMultipleField
+from wtforms import StringField, PasswordField, SubmitField, DateTimeLocalField, TextAreaField, SelectMultipleField, BooleanField
 from wtforms.validators import DataRequired, Email, Length, ValidationError
 
 class RegisterForm(FlaskForm):
@@ -27,6 +27,7 @@ class BookingForm(FlaskForm):
     end_at = DateTimeLocalField("End", validators=[DataRequired()], format="%Y-%m-%dT%H:%M")
     purpose = TextAreaField("Purpose / notes", validators=[DataRequired(), Length(min=5, max=300)])
     machines = SelectMultipleField("Machines", coerce=int, validators=[DataRequired()])
+    request_access = BooleanField("Request site access?")
     submit = SubmitField("Request booking")
 
     def validate_end_at(self, field):
