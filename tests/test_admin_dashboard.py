@@ -115,7 +115,11 @@ def _make_booking_request(db, requester_id, status="pending", age_hours=0):
 
 
 def _get_automation_counts(db, now):
-    """Return (ar_pending, ar_sla_warning, ar_sla_breach, ar_expired) for *now*."""
+    """Return (ar_pending, ar_sla_warning, ar_sla_breach, ar_expired) for *now*.
+
+    ar_pending is the TOTAL count of pending AccessRequests (regardless of age).
+    ar_sla_warning / ar_sla_breach count the overdue subsets.
+    """
     from sqlalchemy import func
 
     warn_threshold   = now - timedelta(hours=_WARN_H)
@@ -123,7 +127,7 @@ def _get_automation_counts(db, now):
 
     ar_pending = db.execute(
         select(func.count()).select_from(AccessRequest)
-        .where(AccessRequest.status == "pending", AccessRequest.created_at > warn_threshold)
+        .where(AccessRequest.status == "pending")
     ).scalar_one()
 
     ar_sla_warning = db.execute(
@@ -152,7 +156,11 @@ def _get_automation_counts(db, now):
 
 
 def _get_br_automation_counts(db, now):
-    """Return (br_pending, br_sla_warning, br_sla_breach, br_expired) for *now*."""
+    """Return (br_pending, br_sla_warning, br_sla_breach, br_expired) for *now*.
+
+    br_pending is the TOTAL count of pending BookingRequests (regardless of age).
+    br_sla_warning / br_sla_breach count the overdue subsets.
+    """
     from sqlalchemy import func
 
     warn_threshold   = now - timedelta(hours=_WARN_H)
@@ -160,7 +168,7 @@ def _get_br_automation_counts(db, now):
 
     br_pending = db.execute(
         select(func.count()).select_from(BookingRequest)
-        .where(BookingRequest.status == "pending", BookingRequest.created_at > warn_threshold)
+        .where(BookingRequest.status == "pending")
     ).scalar_one()
 
     br_sla_warning = db.execute(
@@ -216,26 +224,26 @@ def test_automation_counts_pending_fresh(db):
 
 
 def test_automation_counts_sla_warning(db):
-    """A pending request with age >= 8h and < 48h increments ar_sla_warning."""
+    """A pending request with age >= 8h and < 48h increments ar_sla_warning; ar_pending counts it too."""
     user = _make_user(db, "Alice", "alice@example.com")
     _make_access_request(db, user.id, status="pending", age_hours=10)
     db.commit()
 
     ar_pending, ar_sla_warning, ar_sla_breach, ar_expired = _get_automation_counts(db, _NOW)
-    assert ar_pending == 0
+    assert ar_pending == 1
     assert ar_sla_warning == 1
     assert ar_sla_breach == 0
     assert ar_expired == 0
 
 
 def test_automation_counts_sla_breach(db):
-    """A pending request with age >= 48h increments ar_sla_breach."""
+    """A pending request with age >= 48h increments ar_sla_breach; ar_pending counts it too."""
     user = _make_user(db, "Alice", "alice@example.com")
     _make_access_request(db, user.id, status="pending", age_hours=50)
     db.commit()
 
     ar_pending, ar_sla_warning, ar_sla_breach, ar_expired = _get_automation_counts(db, _NOW)
-    assert ar_pending == 0
+    assert ar_pending == 1
     assert ar_sla_warning == 0
     assert ar_sla_breach == 1
     assert ar_expired == 0
@@ -255,7 +263,7 @@ def test_automation_counts_expired(db):
 
 
 def test_automation_counts_mixed(db):
-    """Multiple requests in different states are counted independently."""
+    """Multiple requests in different states: ar_pending counts all pending (total queue)."""
     user = _make_user(db, "Alice", "alice@example.com")
     _make_access_request(db, user.id, status="pending",  age_hours=1)    # fresh pending
     _make_access_request(db, user.id, status="pending",  age_hours=10)   # sla warning
@@ -266,7 +274,7 @@ def test_automation_counts_mixed(db):
     db.commit()
 
     ar_pending, ar_sla_warning, ar_sla_breach, ar_expired = _get_automation_counts(db, _NOW)
-    assert ar_pending == 1
+    assert ar_pending == 3
     assert ar_sla_warning == 1
     assert ar_sla_breach == 1
     assert ar_expired == 1
@@ -314,26 +322,26 @@ def test_br_automation_counts_pending_fresh(db):
 
 
 def test_br_automation_counts_sla_warning(db):
-    """A pending booking request with age >= 8h and < 48h increments br_sla_warning."""
+    """A pending booking request with age >= 8h and < 48h increments br_sla_warning; br_pending counts it too."""
     user = _make_user(db, "Alice", "alice@example.com")
     _make_booking_request(db, user.id, status="pending", age_hours=10)
     db.commit()
 
     br_pending, br_sla_warning, br_sla_breach, br_expired = _get_br_automation_counts(db, _NOW)
-    assert br_pending == 0
+    assert br_pending == 1
     assert br_sla_warning == 1
     assert br_sla_breach == 0
     assert br_expired == 0
 
 
 def test_br_automation_counts_sla_breach(db):
-    """A pending booking request with age >= 48h increments br_sla_breach."""
+    """A pending booking request with age >= 48h increments br_sla_breach; br_pending counts it too."""
     user = _make_user(db, "Alice", "alice@example.com")
     _make_booking_request(db, user.id, status="pending", age_hours=50)
     db.commit()
 
     br_pending, br_sla_warning, br_sla_breach, br_expired = _get_br_automation_counts(db, _NOW)
-    assert br_pending == 0
+    assert br_pending == 1
     assert br_sla_warning == 0
     assert br_sla_breach == 1
     assert br_expired == 0
@@ -353,7 +361,7 @@ def test_br_automation_counts_expired(db):
 
 
 def test_br_automation_counts_mixed(db):
-    """Multiple booking requests in different states are counted independently."""
+    """Multiple booking requests in different states: br_pending counts all pending (total queue)."""
     user = _make_user(db, "Alice", "alice@example.com")
     _make_booking_request(db, user.id, status="pending",  age_hours=1)    # fresh pending
     _make_booking_request(db, user.id, status="pending",  age_hours=10)   # sla warning
@@ -364,7 +372,7 @@ def test_br_automation_counts_mixed(db):
     db.commit()
 
     br_pending, br_sla_warning, br_sla_breach, br_expired = _get_br_automation_counts(db, _NOW)
-    assert br_pending == 1
+    assert br_pending == 3
     assert br_sla_warning == 1
     assert br_sla_breach == 1
     assert br_expired == 1

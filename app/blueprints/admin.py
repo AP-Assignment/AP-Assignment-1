@@ -65,7 +65,7 @@ def dashboard():
 
         br_pending = db.execute(
             select(func.count()).select_from(BookingRequest)
-            .where(BookingRequest.status == "pending", BookingRequest.created_at > _warn_threshold)
+            .where(BookingRequest.status == "pending")
         ).scalar_one()
 
         br_sla_warning = db.execute(
@@ -92,7 +92,7 @@ def dashboard():
 
         ar_pending = db.execute(
             select(func.count()).select_from(AccessRequest)
-            .where(AccessRequest.status == "pending", AccessRequest.created_at > _warn_threshold)
+            .where(AccessRequest.status == "pending")
         ).scalar_one()
 
         ar_sla_warning = db.execute(
