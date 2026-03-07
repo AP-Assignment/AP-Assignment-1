@@ -45,6 +45,34 @@
     <div class="col-12">
       <div class="card p-3">
         <div class="fw-semibold mb-2">Automation monitoring <span class="text-muted small fw-normal">— system / scheduler metrics</span></div>
+        <div class="text-muted small mb-2">Booking approvals SLA</div>
+        <div class="row g-2 mb-3">
+          <div class="col-6 col-md-3">
+            <div class="card p-3 text-center">
+              <div class="text-muted small">Booking Requests: Pending</div>
+              <div class="fs-3 fw-semibold">{{ br_pending }}</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="card p-3 text-center border-warning">
+              <div class="text-muted small">SLA Warning</div>
+              <div class="fs-3 fw-semibold text-warning">{{ br_sla_warning }}</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="card p-3 text-center border-danger">
+              <div class="text-muted small">SLA Breach</div>
+              <div class="fs-3 fw-semibold text-danger">{{ br_sla_breach }}</div>
+            </div>
+          </div>
+          <div class="col-6 col-md-3">
+            <div class="card p-3 text-center">
+              <div class="text-muted small">Expired</div>
+              <div class="fs-3 fw-semibold text-secondary">{{ br_expired }}</div>
+            </div>
+          </div>
+        </div>
+        <div class="text-muted small mb-2">Access approvals SLA</div>
         <div class="row g-2">
           <div class="col-6 col-md-3">
             <div class="card p-3 text-center">

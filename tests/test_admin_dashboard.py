@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base
-from app.models import AccessRequest, User
+from app.models import AccessRequest, BookingRequest, User
 from app.security import hash_password
 from app.automation.jobs import run_sla_monitoring
 
@@ -95,6 +95,20 @@ def _make_access_request(db, requester_id, status="pending", age_hours=0):
     return ar
 
 
+def _make_booking_request(db, requester_id, status="pending", age_hours=0):
+    br = BookingRequest(
+        requester_id=requester_id,
+        start_at=_NOW + timedelta(days=1),
+        end_at=_NOW + timedelta(days=1, hours=2),
+        purpose="Test booking",
+        status=status,
+        created_at=_NOW - timedelta(hours=age_hours),
+    )
+    db.add(br)
+    db.flush()
+    return br
+
+
 # ---------------------------------------------------------------------------
 # Helper: compute automation state counts the same way the dashboard does
 # ---------------------------------------------------------------------------
@@ -135,6 +149,43 @@ def _get_automation_counts(db, now):
     ).scalar_one()
 
     return ar_pending, ar_sla_warning, ar_sla_breach, ar_expired
+
+
+def _get_br_automation_counts(db, now):
+    """Return (br_pending, br_sla_warning, br_sla_breach, br_expired) for *now*."""
+    from sqlalchemy import func
+
+    warn_threshold   = now - timedelta(hours=_WARN_H)
+    breach_threshold = now - timedelta(hours=_BREACH_H)
+
+    br_pending = db.execute(
+        select(func.count()).select_from(BookingRequest)
+        .where(BookingRequest.status == "pending", BookingRequest.created_at > warn_threshold)
+    ).scalar_one()
+
+    br_sla_warning = db.execute(
+        select(func.count()).select_from(BookingRequest)
+        .where(
+            BookingRequest.status == "pending",
+            BookingRequest.created_at <= warn_threshold,
+            BookingRequest.created_at > breach_threshold,
+        )
+    ).scalar_one()
+
+    br_sla_breach = db.execute(
+        select(func.count()).select_from(BookingRequest)
+        .where(
+            BookingRequest.status == "pending",
+            BookingRequest.created_at <= breach_threshold,
+        )
+    ).scalar_one()
+
+    br_expired = db.execute(
+        select(func.count()).select_from(BookingRequest)
+        .where(BookingRequest.status == "expired")
+    ).scalar_one()
+
+    return br_pending, br_sla_warning, br_sla_breach, br_expired
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +284,120 @@ def test_automation_counts_non_pending_statuses_excluded(db):
     assert ar_sla_warning == 0
     assert ar_sla_breach == 0
     assert ar_expired == 0
+
+
+# ---------------------------------------------------------------------------
+# BookingRequest SLA dashboard count correctness
+# ---------------------------------------------------------------------------
+
+
+def test_br_automation_counts_all_zero_with_no_requests(db):
+    """With no BookingRequests, all BR counts should be zero."""
+    br_pending, br_sla_warning, br_sla_breach, br_expired = _get_br_automation_counts(db, _NOW)
+    assert br_pending == 0
+    assert br_sla_warning == 0
+    assert br_sla_breach == 0
+    assert br_expired == 0
+
+
+def test_br_automation_counts_pending_fresh(db):
+    """A fresh pending booking request (age < 8h) increments only br_pending."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=1)
+    db.commit()
+
+    br_pending, br_sla_warning, br_sla_breach, br_expired = _get_br_automation_counts(db, _NOW)
+    assert br_pending == 1
+    assert br_sla_warning == 0
+    assert br_sla_breach == 0
+    assert br_expired == 0
+
+
+def test_br_automation_counts_sla_warning(db):
+    """A pending booking request with age >= 8h and < 48h increments br_sla_warning."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=10)
+    db.commit()
+
+    br_pending, br_sla_warning, br_sla_breach, br_expired = _get_br_automation_counts(db, _NOW)
+    assert br_pending == 0
+    assert br_sla_warning == 1
+    assert br_sla_breach == 0
+    assert br_expired == 0
+
+
+def test_br_automation_counts_sla_breach(db):
+    """A pending booking request with age >= 48h increments br_sla_breach."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=50)
+    db.commit()
+
+    br_pending, br_sla_warning, br_sla_breach, br_expired = _get_br_automation_counts(db, _NOW)
+    assert br_pending == 0
+    assert br_sla_warning == 0
+    assert br_sla_breach == 1
+    assert br_expired == 0
+
+
+def test_br_automation_counts_expired(db):
+    """A booking request with status='expired' increments br_expired."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking_request(db, user.id, status="expired", age_hours=200)
+    db.commit()
+
+    br_pending, br_sla_warning, br_sla_breach, br_expired = _get_br_automation_counts(db, _NOW)
+    assert br_pending == 0
+    assert br_sla_warning == 0
+    assert br_sla_breach == 0
+    assert br_expired == 1
+
+
+def test_br_automation_counts_mixed(db):
+    """Multiple booking requests in different states are counted independently."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking_request(db, user.id, status="pending",  age_hours=1)    # fresh pending
+    _make_booking_request(db, user.id, status="pending",  age_hours=10)   # sla warning
+    _make_booking_request(db, user.id, status="pending",  age_hours=50)   # sla breach
+    _make_booking_request(db, user.id, status="expired",  age_hours=200)  # expired
+    _make_booking_request(db, user.id, status="approved", age_hours=5)    # approved — not counted
+    _make_booking_request(db, user.id, status="rejected", age_hours=5)    # rejected — not counted
+    db.commit()
+
+    br_pending, br_sla_warning, br_sla_breach, br_expired = _get_br_automation_counts(db, _NOW)
+    assert br_pending == 1
+    assert br_sla_warning == 1
+    assert br_sla_breach == 1
+    assert br_expired == 1
+
+
+def test_br_automation_counts_non_pending_statuses_excluded(db):
+    """Approved and rejected booking requests are not counted in pending/warning/breach."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    for status in ("approved", "rejected", "cancelled"):
+        _make_booking_request(db, user.id, status=status, age_hours=100)
+    db.commit()
+
+    br_pending, br_sla_warning, br_sla_breach, br_expired = _get_br_automation_counts(db, _NOW)
+    assert br_pending == 0
+    assert br_sla_warning == 0
+    assert br_sla_breach == 0
+    assert br_expired == 0
+
+
+def test_br_counts_independent_of_ar_counts(db):
+    """BookingRequest SLA counts are independent of AccessRequest SLA counts."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=10)   # br sla warning
+    _make_access_request(db, user.id, status="pending", age_hours=50)    # ar sla breach
+    db.commit()
+
+    br_pending, br_sla_warning, br_sla_breach, br_expired = _get_br_automation_counts(db, _NOW)
+    ar_pending, ar_sla_warning, ar_sla_breach, ar_expired = _get_automation_counts(db, _NOW)
+
+    assert br_sla_warning == 1
+    assert br_sla_breach == 0
+    assert ar_sla_warning == 0
+    assert ar_sla_breach == 1
 
 
 # ---------------------------------------------------------------------------

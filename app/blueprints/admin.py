@@ -58,10 +58,37 @@ def dashboard():
             select(func.count()).select_from(Machine).where(Machine.status == "out_of_service")
         ).scalar_one()
 
-        # Automation monitoring: AccessRequest counts by SLA state
+        # Automation monitoring: SLA counts for both BookingRequest and AccessRequest
         _now = datetime.utcnow()
         _warn_threshold   = _now - timedelta(hours=8)
         _breach_threshold = _now - timedelta(hours=48)
+
+        br_pending = db.execute(
+            select(func.count()).select_from(BookingRequest)
+            .where(BookingRequest.status == "pending", BookingRequest.created_at > _warn_threshold)
+        ).scalar_one()
+
+        br_sla_warning = db.execute(
+            select(func.count()).select_from(BookingRequest)
+            .where(
+                BookingRequest.status == "pending",
+                BookingRequest.created_at <= _warn_threshold,
+                BookingRequest.created_at > _breach_threshold,
+            )
+        ).scalar_one()
+
+        br_sla_breach = db.execute(
+            select(func.count()).select_from(BookingRequest)
+            .where(
+                BookingRequest.status == "pending",
+                BookingRequest.created_at <= _breach_threshold,
+            )
+        ).scalar_one()
+
+        br_expired = db.execute(
+            select(func.count()).select_from(BookingRequest)
+            .where(BookingRequest.status == "expired")
+        ).scalar_one()
 
         ar_pending = db.execute(
             select(func.count()).select_from(AccessRequest)
@@ -125,6 +152,10 @@ def dashboard():
         cancellations_30=cancellations_30,
         no_shows_30=no_shows_30,
         out_of_service=out_of_service,
+        br_pending=br_pending,
+        br_sla_warning=br_sla_warning,
+        br_sla_breach=br_sla_breach,
+        br_expired=br_expired,
         ar_pending=ar_pending,
         ar_sla_warning=ar_sla_warning,
         ar_sla_breach=ar_sla_breach,
