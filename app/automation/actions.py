@@ -31,12 +31,15 @@ _logger = logging.getLogger(__name__)
 # Lazy import guard: AccessRequestStatusHistory may not exist in all
 # deployments; we import it only when needed rather than at module level.
 try:
-    from ..models import AccessRequest, AccessRequestStatusHistory as _ARSH
+    from ..models import AccessRequest
+    from ..models import AccessRequestStatusHistory as _ARSH
+    from ..models import BookingRequest as _BR
     _ARSH_AVAILABLE = True
 except ImportError:  # pragma: no cover
     _ARSH_AVAILABLE = False
     AccessRequest = None  # type: ignore[assignment,misc]
     _ARSH = None  # type: ignore[assignment]
+    _BR = None  # type: ignore[assignment]
 
 _SYSTEM_ACTOR = "system@scheduler"
 _DEFAULT_RULE_VERSION = "automation_rules_v1.1"
@@ -189,6 +192,14 @@ def _handle_status_change(
         _SYSTEM_ACTOR, entity_type, entity_id, previous_status, new_status, reason,
     )
 
+    # Cascade expiry to a linked pending AccessRequest when a BookingRequest expires.
+    if _BR is not None and isinstance(request, _BR) and new_status == "expired":
+        linked_ar = request.access_request
+        if linked_ar is not None:
+            _cascade_expire_linked_access_request(
+                db_session, linked_ar, request.id, now, rule_version
+            )
+
 
 def _handle_notify(
     db_session: Session,
@@ -249,3 +260,66 @@ def _notification_message(entity_type: str, entity_id: Any, reason: str) -> str:
     if reason == "AUTO_EXPIRE":
         return f"{entity_type} #{entity_id} has been automatically expired."
     return f"Automation event {reason} for {entity_type} #{entity_id}."
+
+
+def _cascade_expire_linked_access_request(
+    db_session: Session,
+    linked_ar: Any,
+    booking_id: Any,
+    now: datetime,
+    rule_version: str,
+) -> None:
+    """Expire a linked pending AccessRequest when its BookingRequest is auto-expired.
+
+    Mirrors the manual cascade in the admin reject-booking flow: when a
+    BookingRequest transitions to ``expired`` via SLA automation, any
+    associated ``AccessRequest`` still in ``pending`` state is also expired
+    so that it doesn't linger in the approval queue.
+    """
+    if linked_ar.status != "pending":
+        return
+
+    previous_status = linked_ar.status
+    linked_ar.status = "expired"
+    linked_ar.updated_at = now
+    linked_ar.decision_note = (
+        f"Auto-expired: linked booking #{booking_id} was expired by SLA automation."
+    )
+
+    if _ARSH_AVAILABLE and _ARSH is not None:
+        db_session.add(_ARSH(
+            access_request_id=linked_ar.id,
+            previous_status=previous_status,
+            status="expired",
+            changed_by_id=None,
+            changed_at=now,
+            note="System automation: CASCADE_EXPIRE_FROM_BOOKING",
+        ))
+
+    cascade_audit_action = "automation:STATUS_CHANGE:CASCADE_EXPIRE_ACCESS_REQUEST"
+    detail = (
+        f"rule_version={rule_version} entity_type=AccessRequest "
+        f"entity_id={linked_ar.id} previous_status={previous_status} "
+        f"new_status=expired reason=CASCADE_EXPIRE_FROM_BOOKING "
+        f"booking_request_id={booking_id}"
+    )
+    db_session.add(AuditLog(
+        at=now,
+        actor_email=_SYSTEM_ACTOR,
+        action=cascade_audit_action,
+        detail=detail,
+    ))
+    db_session.add(Notification(
+        user_id=linked_ar.requester_id,
+        message=(
+            f"Access request #{linked_ar.id} has been automatically expired "
+            f"because booking #{booking_id} expired."
+        ),
+        created_at=now,
+    ))
+    _logger.info(
+        "actor=%s action=STATUS_CHANGE entity_type=AccessRequest entity_id=%s "
+        "previous_status=%s new_status=expired reason=CASCADE_EXPIRE_FROM_BOOKING "
+        "booking_request_id=%s",
+        _SYSTEM_ACTOR, linked_ar.id, previous_status, booking_id,
+    )

@@ -563,3 +563,136 @@ def test_both_entity_types_processed_together(SessionLocal, db):
         assert any("AccessRequest" in d for d in detail_texts)
         assert any("BookingRequest" in d for d in detail_texts)
 
+
+# ===========================================================================
+# Cascade expiry: BookingRequest expiry expires linked AccessRequest
+# ===========================================================================
+
+
+def _make_linked_access_request(db, requester_id, booking_request_id, status="pending"):
+    """Create an AccessRequest linked to a BookingRequest."""
+    ar = AccessRequest(
+        requester_id=requester_id,
+        assignment="Test assignment",
+        booking_request_id=booking_request_id,
+        status=status,
+        created_at=_NOW,
+    )
+    db.add(ar)
+    db.flush()
+    return ar
+
+
+def test_booking_expiry_cascades_to_linked_pending_access_request(SessionLocal, db):
+    """When a BookingRequest is auto-expired, its linked pending AccessRequest is also expired."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    br = _make_booking_request(db, user.id, status="pending", age_hours=24 * 8)
+    ar = _make_linked_access_request(db, user.id, br.id, status="pending")
+    db.commit()
+    br_id, ar_id = br.id, ar.id
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        refreshed_br = s.get(BookingRequest, br_id)
+        refreshed_ar = s.get(AccessRequest, ar_id)
+        assert refreshed_br.status == "expired"
+        assert refreshed_ar.status == "expired"
+
+
+def test_booking_expiry_cascade_records_access_request_status_history(SessionLocal, db):
+    """Cascade expiry of a linked AccessRequest must add an AccessRequestStatusHistory row."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    br = _make_booking_request(db, user.id, status="pending", age_hours=24 * 8)
+    ar = _make_linked_access_request(db, user.id, br.id, status="pending")
+    db.commit()
+    ar_id = ar.id
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        history = s.execute(select(AccessRequestStatusHistory)).scalars().all()
+        assert len(history) == 1
+        assert history[0].access_request_id == ar_id
+        assert history[0].previous_status == "pending"
+        assert history[0].status == "expired"
+
+
+def test_booking_expiry_cascade_writes_audit_and_notifies_requester(SessionLocal, db):
+    """Cascade expiry writes an audit entry and sends a notification to the AR requester."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    admin = _make_admin(db, "Admin", "admin@example.com")
+    br = _make_booking_request(db, user.id, status="pending", age_hours=24 * 8)
+    ar = _make_linked_access_request(db, user.id, br.id, status="pending")
+    db.commit()
+    ar_id = ar.id
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        logs = s.execute(select(AuditLog)).scalars().all()
+        # BR: STATUS_CHANGE:AUTO_EXPIRE + automation:AUTO_EXPIRE
+        # AR cascade: STATUS_CHANGE:CASCADE_EXPIRE_ACCESS_REQUEST
+        assert len(logs) == 3
+        actions = {log.action for log in logs}
+        assert "automation:STATUS_CHANGE:CASCADE_EXPIRE_ACCESS_REQUEST" in actions
+
+        # Requester (user) gets a notification about the cascade expiry
+        notifs = s.execute(select(Notification)).scalars().all()
+        # admin gets 1 AUTO_EXPIRE notification; user gets 1 cascade notification
+        assert len(notifs) == 2
+        user_notif = next(n for n in notifs if n.user_id == user.id)
+        assert str(ar_id) in user_notif.message
+
+
+def test_booking_expiry_no_cascade_when_no_linked_ar(SessionLocal, db):
+    """Expiring a BookingRequest without a linked AR must not raise an error."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    _make_booking_request(db, user.id, status="pending", age_hours=24 * 8)
+    db.commit()
+
+    # Should not raise
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        history = s.execute(select(AccessRequestStatusHistory)).scalars().all()
+        assert history == []
+
+
+def test_booking_expiry_does_not_cascade_to_non_pending_linked_ar(SessionLocal, db):
+    """A linked AR that is already approved/rejected is not touched by cascade expiry."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    for ar_status in ("approved", "rejected"):
+        br = _make_booking_request(db, user.id, status="pending", age_hours=24 * 8)
+        _make_linked_access_request(db, user.id, br.id, status=ar_status)
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        # No cascade status history created
+        assert s.execute(select(AccessRequestStatusHistory)).scalars().all() == []
+        # AR statuses are unchanged
+        ars = s.execute(select(AccessRequest)).scalars().all()
+        for ar in ars:
+            assert ar.status in ("approved", "rejected")
+
+
+def test_booking_expiry_cascade_idempotency(SessionLocal, db):
+    """Running run_sla_monitoring twice must not double-expire the linked AccessRequest."""
+    user = _make_user(db, "Alice", "alice@example.com")
+    admin = _make_admin(db, "Admin", "admin@example.com")
+    br = _make_booking_request(db, user.id, status="pending", age_hours=24 * 8)
+    _make_linked_access_request(db, user.id, br.id, status="pending")
+    db.commit()
+
+    run_sla_monitoring(SessionLocal, now=_NOW)
+    run_sla_monitoring(SessionLocal, now=_NOW)
+
+    with SessionLocal() as s:
+        # Status history must have exactly one entry for the AR
+        assert len(s.execute(select(AccessRequestStatusHistory)).scalars().all()) == 1
+        # AuditLog: BR STATUS_CHANGE + BR NOTIFY + AR cascade = 3 on first run, no new ones on second
+        assert len(s.execute(select(AuditLog)).scalars().all()) == 3
+
+
