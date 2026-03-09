@@ -47,6 +47,12 @@
                 </div>
               </div>
               {{ form.machines(class_="form-select", size="10", id="machines-select") }}
+              <div class="form-check mt-2">
+                <input class="form-check-input" type="checkbox" id="show-unavailable-toggle">
+                <label class="form-check-label small text-muted" for="show-unavailable-toggle">
+                  Show unavailable machines
+                </label>
+              </div>
               <div class="text-muted small mt-1">Tip: hold Ctrl (Windows) / Cmd (Mac) to select multiple.</div>
               {% for e in form.machines.errors %}<div class="text-warning small">{{ e }}</div>{% endfor %}
             </div>
@@ -77,11 +83,27 @@
 (function () {
   var machineTypeMap = {{ machine_type_map | tojson }};
   var machineLocationMap = {{ machine_location_map | tojson }};
+  var machineStatusMap = {{ machine_status_map | tojson }};
   var select = document.getElementById("machines-select");
   var filterType = document.getElementById("filter-type");
   var filterLocation = document.getElementById("filter-location");
   var row = document.getElementById("access-request-row");
   var checkbox = document.getElementById("request-access-check");
+  var showUnavailableToggle = document.getElementById("show-unavailable-toggle");
+
+  // Mark unavailable machine options as disabled with a visual indicator
+  Array.from(select.options).forEach(function (opt) {
+    var id = parseInt(opt.value, 10);
+    if (machineStatusMap[id] !== "available") {
+      opt.disabled = true;
+      opt.text = opt.text + " [unavailable]";
+      opt.className = "text-muted";
+    }
+  });
+
+  function isUnavailable(opt) {
+    return machineStatusMap[parseInt(opt.value, 10)] !== "available";
+  }
 
   function updateVisibility() {
     var selectedOptions = Array.from(select.selectedOptions);
@@ -97,11 +119,13 @@
   function applyFilters() {
     var typeVal = filterType.value;
     var locVal = filterLocation.value ? parseInt(filterLocation.value) : null;
+    var showUnavailable = showUnavailableToggle.checked;
     Array.from(select.options).forEach(function (opt) {
-      var id = parseInt(opt.value);
+      var id = parseInt(opt.value, 10);
       var typeMatch = !typeVal || machineTypeMap[id] === typeVal;
       var locMatch = locVal === null || machineLocationMap[id] === locVal;
-      opt.hidden = !(typeMatch && locMatch);
+      var unavailable = isUnavailable(opt);
+      opt.hidden = !(typeMatch && locMatch) || (unavailable && !showUnavailable);
       if (opt.hidden) {
         opt.selected = false;
       }
@@ -111,8 +135,9 @@
 
   filterType.addEventListener("change", applyFilters);
   filterLocation.addEventListener("change", applyFilters);
+  showUnavailableToggle.addEventListener("change", applyFilters);
   select.addEventListener("change", updateVisibility);
-  updateVisibility();
+  applyFilters();
 })();
 </script>
 {% endblock %}

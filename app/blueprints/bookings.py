@@ -40,13 +40,13 @@ def new_booking():
         machines = db.execute(
             select(Machine)
             .options(joinedload(Machine.site), joinedload(Machine.location))
-            .where(Machine.status == "available")
             .order_by(Machine.name)
         ).scalars().all()
         form.machines.choices = [(m.id, f"{m.name} • {m.machine_type.upper()} • {m.site.city}") for m in machines]
         # Mappings exposed to the template for JS-driven filtering and checkbox visibility
         machine_type_map = {m.id: m.machine_type for m in machines}
         machine_location_map = {m.id: m.location_id for m in machines}
+        machine_status_map = {m.id: m.status for m in machines}
         # Unique locations for the filter dropdown (location_id → location name)
         locations = {}
         for m in machines:
@@ -58,14 +58,16 @@ def new_booking():
             if not ok:
                 flash(msg, "warning")
                 return render_template("new_booking.html", form=form, machine_type_map=machine_type_map,
-                                       machine_location_map=machine_location_map, locations=locations)
+                                       machine_location_map=machine_location_map, machine_status_map=machine_status_map,
+                                       locations=locations)
 
             ids = list(dict.fromkeys(form.machines.data))
             ok2, msg2 = machines_exist_and_available(db, ids)
             if not ok2:
                 flash(msg2, "warning")
                 return render_template("new_booking.html", form=form, machine_type_map=machine_type_map,
-                                       machine_location_map=machine_location_map, locations=locations)
+                                       machine_location_map=machine_location_map, machine_status_map=machine_status_map,
+                                       locations=locations)
 
             # Re-fetch selected machines to determine lab/site membership (anti-spoofing)
             selected_machines = db.execute(select(Machine).where(Machine.id.in_(ids))).scalars().all()
@@ -123,7 +125,8 @@ def new_booking():
             return redirect(url_for("bookings.my_bookings"))
 
     return render_template("new_booking.html", form=form, machine_type_map=machine_type_map,
-                           machine_location_map=machine_location_map, locations=locations)
+                           machine_location_map=machine_location_map, machine_status_map=machine_status_map,
+                           locations=locations)
 
 @bp.post("/cancel/<int:booking_id>")
 @login_required
