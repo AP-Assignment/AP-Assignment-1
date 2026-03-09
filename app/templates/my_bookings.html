@@ -19,6 +19,9 @@
             <th>Status</th>
             <th>Access</th>
             <th>Machines</th>
+            <th>Type</th>
+            <th>Location</th>
+            <th>Comments</th>
             <th>No-show</th>
             <th class="text-end">Actions</th>
           </tr>
@@ -60,6 +63,30 @@
                   <span class="badge tm-pill me-1 mb-1">{{ it.machine.name }}</span>
                 {% endfor %}
               </td>
+              <td class="small">
+                {% set types = b.items | map(attribute='machine.machine_type') | unique | list %}
+                {% for t in types %}
+                  <span class="badge bg-secondary me-1">{{ t | upper }}</span>
+                {% endfor %}
+              </td>
+              <td class="small">
+                {% set locations = [] %}
+                {% for it in b.items %}
+                  {% if it.machine.location %}
+                    {% if it.machine.location.name not in locations %}
+                      {% set _ = locations.append(it.machine.location.name) %}
+                    {% endif %}
+                  {% elif it.machine.site %}
+                    {% if it.machine.site.city not in locations %}
+                      {% set _ = locations.append(it.machine.site.city) %}
+                    {% endif %}
+                  {% endif %}
+                {% endfor %}
+                {% for loc in locations %}
+                  <div>{{ loc }}</div>
+                {% endfor %}
+              </td>
+              <td class="small text-muted">{{ b.purpose }}</td>
               <td>
                 {% if b.no_show %}
                   <span class="badge bg-danger">Yes</span>
@@ -84,7 +111,7 @@
               </td>
             </tr>
           {% else %}
-            <tr><td colspan="7" class="text-muted">No bookings yet.</td></tr>
+            <tr><td colspan="10" class="text-muted">No bookings yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>

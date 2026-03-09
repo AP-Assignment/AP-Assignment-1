@@ -24,7 +24,8 @@ def my_bookings():
         bookings = db.execute(
             select(BookingRequest)
             .options(
-                selectinload(BookingRequest.items).selectinload(BookingItem.machine),
+                selectinload(BookingRequest.items).selectinload(BookingItem.machine).selectinload(Machine.location),
+                selectinload(BookingRequest.items).selectinload(BookingItem.machine).selectinload(Machine.site),
                 joinedload(BookingRequest.access_request),
             )
             .where(BookingRequest.requester_id == current_user.id)
