@@ -19,12 +19,22 @@ Relationship map (→ = FK / many-to-one, ↔ = bidirectional):
   User          1 ↔ N  AccessRequest     as resolver  (user.resolved_access_requests / access_request.resolver)
   User          1 ↔ N  Assignment        as owner     (user.owned_assignments / assignment.owner)
   User          1 ↔ N  AssignmentApprover (user.assignment_approver_roles / assignment_approver.approver)
+  User          1 ↔ N  Evidence          as uploader  (user.uploaded_evidence / evidence.uploaded_by) [optional]
   BookingRequest 1 ↔ N  BookingItem      (booking.items / booking_item.booking)
   BookingRequest 1 ↔ 1  AccessRequest    (booking.access_request / access_request.booking_request)
   Machine        1 ↔ N  BookingItem      (machine.booking_items / booking_item.machine)
   Assignment     1 ↔ N  AssignmentApprover (assignment.approvers / assignment_approver.assignment)
   Assignment     1 ↔ N  AccessRequest    (assignment.access_requests / access_request.assignment_ref)
+  Assignment     1 ↔ N  Evidence         (assignment.evidence / evidence.assignment_ref) [optional]
   AccessRequest  1 ↔ N  AccessRequestStatusHistory (access_request.status_history)
+  AccessRequest  1 ↔ N  Evidence         (access_request.evidence / evidence.access_request_ref) [optional]
+
+  Edge cases:
+  - Evidence.access_request_id and Evidence.assignment_id are both nullable, but
+    application logic (enforced in the service layer) requires at least one to be
+    set so that every evidence record is traceable to a request or assignment.
+  - Evidence.uploaded_by_email is denormalized (captured at upload time) so that
+    audit records remain accurate even after a user account is deleted or renamed.
 """
 
 from __future__ import annotations
@@ -197,6 +207,9 @@ class User(Base, UserMixin):
     )
     assignment_approver_roles: Mapped[List["AssignmentApprover"]] = relationship(
         back_populates="approver", foreign_keys="AssignmentApprover.approver_id"
+    )
+    uploaded_evidence: Mapped[List["Evidence"]] = relationship(
+        back_populates="uploaded_by", foreign_keys="Evidence.uploaded_by_id"
     )
 
     def is_active(self) -> bool:
@@ -384,6 +397,12 @@ class AccessRequest(Base):
     status_history: Mapped[List["AccessRequestStatusHistory"]] = relationship(
         back_populates="access_request", cascade="all, delete-orphan", order_by="AccessRequestStatusHistory.changed_at"
     )
+    # cascade="all, delete-orphan" keeps evidence in sync with the request.
+    evidence: Mapped[List["Evidence"]] = relationship(
+        back_populates="access_request_ref",
+        foreign_keys="Evidence.access_request_id",
+        cascade="all, delete-orphan",
+    )
 
 
 class AccessRequestStatusHistory(Base):
@@ -454,6 +473,12 @@ class Assignment(Base):
     access_requests: Mapped[List["AccessRequest"]] = relationship(
         back_populates="assignment_ref", foreign_keys="AccessRequest.assignment_id"
     )
+    # cascade="all, delete-orphan" keeps evidence in sync with the assignment.
+    evidence: Mapped[List["Evidence"]] = relationship(
+        back_populates="assignment_ref",
+        foreign_keys="Evidence.assignment_id",
+        cascade="all, delete-orphan",
+    )
 
 
 class AssignmentApprover(Base):
@@ -484,4 +509,72 @@ class AssignmentApprover(Base):
     assignment: Mapped["Assignment"] = relationship(back_populates="approvers")
     approver: Mapped["User"] = relationship(
         back_populates="assignment_approver_roles", foreign_keys=[approver_id]
+    )
+
+
+class Evidence(Base):
+    """A piece of supporting evidence attached to an AccessRequest and/or Assignment.
+
+    Evidence records store the location of a file (or external reference) together
+    with structured metadata so that auditors can trace *what* was uploaded, *when*,
+    and *by whom*, without parsing free-text fields.
+
+    Normalization notes:
+    - ``uploaded_by_email`` is denormalized (captured at upload time) for the same
+      reason as ``AuditLog.actor_email``: the record must remain readable even if
+      the uploader's account is later deleted or their email is changed.
+    - ``uploaded_by_id`` is kept as a nullable FK so that live accounts can be
+      navigated from the evidence record, while the denormalized email remains the
+      reliable long-term audit field.
+    - Both ``access_request_id`` and ``assignment_id`` are nullable at the database
+      level to allow maximum flexibility, but the service layer enforces that at
+      least one is provided when creating a new evidence record.
+    - ``evidence_type`` is a constrained string rather than a FK to a lookup table;
+      the enumeration is small and stable, so a separate table would add join cost
+      with no normalisation benefit.
+    - cascade="all, delete-orphan" on the parent relationships means that deleting
+      an AccessRequest or Assignment also removes its attached evidence rows,
+      preventing orphan records from accumulating in the evidence table.
+
+    Valid values for ``evidence_type``:
+        document | screenshot | certificate | log | photo | other
+    """
+
+    __tablename__ = "evidence"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Human-readable label for this piece of evidence.
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    # Optional longer description or context note.
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Relative or absolute file-system path (or URL) to the stored evidence file.
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Constrained type string: document | screenshot | certificate | log | photo | other
+    evidence_type: Mapped[str] = mapped_column(String(50), nullable=False, default="document")
+    # Timestamp when the evidence was uploaded / recorded (UTC).
+    uploaded_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+    # Nullable FK to the uploading user — nullable so system processes can create
+    # evidence records without a user account.
+    uploaded_by_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
+    # Denormalized email captured at upload time for long-term auditability.
+    uploaded_by_email: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # Optional FK to the AccessRequest this evidence supports.
+    access_request_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("access_requests.id"), nullable=True
+    )
+    # Optional FK to the Assignment this evidence supports.
+    assignment_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("assignments.id"), nullable=True
+    )
+
+    # Relationships
+    uploaded_by: Mapped[Optional["User"]] = relationship(
+        back_populates="uploaded_evidence", foreign_keys=[uploaded_by_id]
+    )
+    access_request_ref: Mapped[Optional["AccessRequest"]] = relationship(
+        back_populates="evidence", foreign_keys=[access_request_id]
+    )
+    assignment_ref: Mapped[Optional["Assignment"]] = relationship(
+        back_populates="evidence", foreign_keys=[assignment_id]
     )
