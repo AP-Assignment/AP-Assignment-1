@@ -45,7 +45,7 @@ The Test Machine Booking Tool is a Flask-based web application designed to manag
 
 1. **Clone the repository**
    ```bash
-   git clone https://github.com/nickboyd99/AP-Assignment-1.git
+   git clone https://github.com/AP-Assignment/AP-Assignment-1.git
    cd AP-Assignment-1
    ```
 
