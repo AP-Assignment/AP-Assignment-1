@@ -43,6 +43,8 @@ def seed(db_url: str = "sqlite:///app.db"):
         db.flush()
 
         # Seed two standard locations per site: a lab area and a virtual lab
+        # site_id → {"lab": location_id, "virtual": location_id}
+        site_location_map: dict[int, dict[str, int]] = {}
         for site in sites:
             lab = Location(
                 name=f"{site.city} Lab",
@@ -60,6 +62,7 @@ def seed(db_url: str = "sqlite:///app.db"):
             db.add(lab)
             db.add(virtual)
             db.flush()
+            site_location_map[site.id] = {"lab": lab.id, "virtual": virtual.id}
             # Example sub-location within the lab (hierarchy)
             db.add(Location(
                 name=f"{site.city} Lab – Bay A",
@@ -70,15 +73,18 @@ def seed(db_url: str = "sqlite:///app.db"):
                 description="Bay A – first row of test benches.",
             ))
 
-        # 100 machines
+        # 100 machines – each assigned to the appropriate location for its type
         for i in range(1, 101):
+            mtype = random.choice(types)
+            site = random.choice(sites)
             db.add(
                 Machine(
                     name=f"TM-{i:03d}",
-                    machine_type=random.choice(types),
+                    machine_type=mtype,
                     category=random.choice(categories),
                     status="available" if random.random() > 0.08 else "out_of_service",
-                    site_id=random.choice(sites).id,
+                    site_id=site.id,
+                    location_id=site_location_map[site.id][mtype],
                 )
             )
 
