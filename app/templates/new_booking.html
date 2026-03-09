@@ -27,6 +27,25 @@
             </div>
             <div class="col-12">
               {{ form.machines.label(class_="form-label") }}
+              <div class="row g-2 mb-2">
+                <div class="col-md-6">
+                  <label for="filter-type" class="form-label small fw-semibold">Filter by type</label>
+                  <select id="filter-type" class="form-select form-select-sm">
+                    <option value="">All types</option>
+                    <option value="lab">LAB</option>
+                    <option value="virtual">Virtual</option>
+                  </select>
+                </div>
+                <div class="col-md-6">
+                  <label for="filter-location" class="form-label small fw-semibold">Filter by location</label>
+                  <select id="filter-location" class="form-select form-select-sm">
+                    <option value="">All locations</option>
+                    {% for loc_id, loc_name in locations.items() %}
+                      <option value="{{ loc_id }}">{{ loc_name }}</option>
+                    {% endfor %}
+                  </select>
+                </div>
+              </div>
               {{ form.machines(class_="form-select", size="10", id="machines-select") }}
               <div class="text-muted small mt-1">Tip: hold Ctrl (Windows) / Cmd (Mac) to select multiple.</div>
               {% for e in form.machines.errors %}<div class="text-warning small">{{ e }}</div>{% endfor %}
@@ -57,7 +76,10 @@
 <script>
 (function () {
   var machineTypeMap = {{ machine_type_map | tojson }};
+  var machineLocationMap = {{ machine_location_map | tojson }};
   var select = document.getElementById("machines-select");
+  var filterType = document.getElementById("filter-type");
+  var filterLocation = document.getElementById("filter-location");
   var row = document.getElementById("access-request-row");
   var checkbox = document.getElementById("request-access-check");
 
@@ -72,6 +94,23 @@
     }
   }
 
+  function applyFilters() {
+    var typeVal = filterType.value;
+    var locVal = filterLocation.value ? parseInt(filterLocation.value) : null;
+    Array.from(select.options).forEach(function (opt) {
+      var id = parseInt(opt.value);
+      var typeMatch = !typeVal || machineTypeMap[id] === typeVal;
+      var locMatch = locVal === null || machineLocationMap[id] === locVal;
+      opt.hidden = !(typeMatch && locMatch);
+      if (opt.hidden) {
+        opt.selected = false;
+      }
+    });
+    updateVisibility();
+  }
+
+  filterType.addEventListener("change", applyFilters);
+  filterLocation.addEventListener("change", applyFilters);
   select.addEventListener("change", updateVisibility);
   updateVisibility();
 })();
