@@ -51,7 +51,7 @@ def dashboard():
 
         no_shows_30 = db.execute(
             select(func.count()).select_from(BookingRequest)
-            .where(BookingRequest.no_show.is_(True), BookingRequest.end_at >= datetime.utcnow() - timedelta(days=30))
+            .where(BookingRequest.no_show == True, BookingRequest.end_at >= datetime.utcnow() - timedelta(days=30))
         ).scalar_one()
 
         out_of_service = db.execute(
