@@ -302,6 +302,34 @@ def test_removing_evidence_from_collection_does_not_delete_it(
     assert surviving.assignment_id == assignment.id
 
 
+def test_deleting_access_request_cascades_for_cross_linked_evidence(
+    db, uploader, access_request, assignment
+):
+    """Deleting one parent of a cross-linked Evidence row should cascade and delete
+    the Evidence row, even if it is also linked to another parent.
+
+    This locks in the expected behavior for cross-linked Evidence when a parent
+    object is actually deleted (as opposed to merely being unlinked from a
+    relationship collection)."""
+    ev = Evidence(
+        title="Cross-linked evidence for cascade delete",
+        file_path="/uploads/cross-cascade.pdf",
+        uploaded_by_email=uploader.email,
+        access_request_id=access_request.id,
+        assignment_id=assignment.id,
+    )
+    db.add(ev)
+    db.commit()
+    ev_id = ev.id
+
+    # Delete the AccessRequest; cascade rules should remove the Evidence row
+    db.delete(access_request)
+    db.commit()
+
+    # Evidence row must no longer exist after deleting one of its parents
+    assert db.get(Evidence, ev_id) is None
+
+
 def test_removing_evidence_from_assignment_collection_does_not_delete_it(
     db, uploader, access_request, assignment
 ):
