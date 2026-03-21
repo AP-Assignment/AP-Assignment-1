@@ -56,13 +56,6 @@ def test_utilisation_export_data():
 
         util = utilisation_last_days(db, days=30)
 
-    # Convert by_category to dicts if needed
-    by_category = [
-        {"category": r[0], "hours": float(r[1] or 0)}
-        for r in util["by_category"]
-    ]
-    util["by_category"] = by_category
-
     # Verify the shape expected by the CSV export
     assert "by_machine" in util
     assert "by_category" in util

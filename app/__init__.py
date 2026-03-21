@@ -47,7 +47,11 @@ def create_app():
     load_dotenv()
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", "dev-secret-key-change-me")
-    db_url = os.getenv("DATABASE_URL", "sqlite:///app.db")
+    db_url = (
+        os.getenv("DATABASE_URL")
+        or os.getenv("CONNECTION_STRING")
+        or "sqlite:///app.db"
+    )
 
     engine = create_engine(
         db_url,

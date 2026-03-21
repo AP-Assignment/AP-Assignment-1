@@ -6,38 +6,34 @@ Created on Thu Jan  8 09:56:32 2026
 """
 
 import os
-import sys
-from flask import Flask
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__)))
-
-from decouple import config
-from config import DevelopmentConfig, DevServerConfig
 from app import create_app
 from seed import seed
 
-# Environment and Config setup
-env = config('FLASK_ENV', default='development')
 
-if env == "development":
-    config_class = DevelopmentConfig
-elif env == "dev_server":
-    config_class = DevServerConfig
-else:
-    config_class = DevelopmentConfig
+def _bootstrap_local_db() -> None:
+    """Seed a local SQLite database on first run.
 
-# Create app
+    Only runs when DATABASE_URL points at a SQLite file that does not yet
+    exist. Non-SQLite URLs (cloud/Gunicorn deployments) are left untouched.
+    The Werkzeug reloader spawns a child process with WERKZEUG_RUN_MAIN=true;
+    seeding only in the outer process avoids a double-seed race condition
+    (the child finds the file already present and skips naturally).
+    """
+    db_url = os.getenv("DATABASE_URL", "sqlite:///app.db")
+    if not db_url.startswith("sqlite:///"):
+        return
+    # Skip in the Werkzeug reloader child process - the outer process already
+    # created/seeded the file before the child starts.
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+        return
+    db_path = db_url[len("sqlite:///"):]
+    if not os.path.exists(db_path):
+        seed(db_url)
+
+
+_bootstrap_local_db()
 app = create_app()
-app.config.from_object(config_class)
-
-# Db setup
-connection_string = app.config['CONNECTION_STRING']
-engine = create_engine(connection_string, echo=True)
-Session = sessionmaker(bind=engine)
-connect_src = app.config.get('CONNECT_SRC', None)
-
 
 if __name__ == "__main__":
     app.run(debug=True)

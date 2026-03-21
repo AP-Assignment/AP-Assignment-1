@@ -12,7 +12,7 @@ from app.db import Base
 from app.models import Site, Machine, User, Location
 from app.security import hash_password
 
-def seed(db_url: str = "mssql+pymssql://apassignment1:Vm4~~ElP8AEs@den1.mssql7.gear.host"):
+def seed(db_url: str = "sqlite:///app.db"):
     engine = create_engine(
         db_url,
         future=True,
