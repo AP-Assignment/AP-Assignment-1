@@ -6,7 +6,7 @@ Created on Tue Jan 13 14:15:27 2026
 """
 
 from datetime import datetime, timedelta
-from sqlalchemy import select, func, Float, text
+from sqlalchemy import select, func, Float, text, cast
 from sqlalchemy.orm import Session
 
 from ..models import BookingRequest, BookingItem, Machine
@@ -24,14 +24,21 @@ def utilisation_last_days(db: Session, days: int = 30):
             - func.julianday(BookingRequest.start_at)
         ) * 24.0
     elif dialect_name == "mssql":
-        # DATEDIFF(minute, ...) returns an integer; divide by 60.0 for hours.
+        # DATEDIFF(minute, ...) returns an integer; cast to Float before
+        # dividing so SQL Server performs floating-point division.
+        # text("minute") renders the datepart as a literal keyword, not a
+        # bound parameter (which SQL Server does not accept for dateparts).
         duration_expr = (
-            func.DATEDIFF(
-                text("minute"),
-                BookingRequest.start_at,
-                BookingRequest.end_at,
-            ) / 60.0
-        ).cast(Float)
+            cast(
+                func.DATEDIFF(
+                    text("minute"),
+                    BookingRequest.start_at,
+                    BookingRequest.end_at,
+                ),
+                Float,
+            )
+            / 60.0
+        )
     else:
         raise NotImplementedError(
             f"utilisation_last_days() does not support the '{dialect_name}' "
