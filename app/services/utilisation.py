@@ -16,21 +16,27 @@ def utilisation_last_days(db: Session, days: int = 30):
     since = datetime.utcnow() - timedelta(days=days)
     dialect_name = db.bind.dialect.name  # Detect the DB dialect
 
-    # Pick the appropriate duration calculation
+    # Pick the appropriate duration calculation (returns hours as a float).
     if dialect_name == "sqlite":
+        # julianday returns fractional days; multiply by 24 to get hours.
         duration_expr = (
             func.julianday(BookingRequest.end_at)
             - func.julianday(BookingRequest.start_at)
         ) * 24.0
-    else:  # SQL Server, PostgreSQL, etc.
-        # SQL Server: use DATEDIFF in minutes, then divide by 60 for hours
+    elif dialect_name == "mssql":
+        # DATEDIFF(minute, ...) returns an integer; divide by 60.0 for hours.
         duration_expr = (
             func.DATEDIFF(
-                text('minute'),
+                text("minute"),
                 BookingRequest.start_at,
                 BookingRequest.end_at,
             ) / 60.0
         ).cast(Float)
+    else:
+        raise NotImplementedError(
+            f"utilisation_last_days() does not support the '{dialect_name}' "
+            "dialect. Supported dialects: sqlite, mssql."
+        )
 
     # By machine
     rows = db.execute(
