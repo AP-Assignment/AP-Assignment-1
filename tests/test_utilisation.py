@@ -185,30 +185,44 @@ class TestMssqlDialect:
 
     def test_mssql_uses_datediff_expression(self):
         """
-        When dialect is mssql, the duration expression must use DATEDIFF.
-        We verify by inspecting the compiled SQL for the expression.
+        When dialect is mssql, the duration expression must compile to
+        DATEDIFF(minute, ...) with 'minute' as an inline keyword – NOT as a
+        bound parameter (SQL Server does not allow parameterized dateparts).
         """
-        from sqlalchemy import text as sa_text
+        from sqlalchemy import Float, cast, text as sa_text
         from sqlalchemy.dialects import mssql as mssql_dialect
-
-        # Re-derive the expression the same way utilisation_last_days does.
-        from sqlalchemy import func, Float
+        from sqlalchemy import func
         from app.models import BookingRequest
 
+        # Re-derive the expression the same way utilisation_last_days does.
         duration_expr = (
-            func.DATEDIFF(
-                sa_text("minute"),
-                BookingRequest.start_at,
-                BookingRequest.end_at,
-            ) / 60.0
-        ).cast(Float)
+            cast(
+                func.DATEDIFF(
+                    sa_text("minute"),
+                    BookingRequest.start_at,
+                    BookingRequest.end_at,
+                ),
+                Float,
+            )
+            / 60.0
+        )
 
         compiled = duration_expr.compile(
             dialect=mssql_dialect.dialect()
         )
         sql_str = str(compiled).upper()
+
+        # Verify DATEDIFF is used
         assert "DATEDIFF" in sql_str
-        assert "MINUTE" in sql_str
+        # Verify 'minute' appears as an inline keyword directly after
+        # the opening parenthesis – not as a named parameter (:MINUTE_1 etc.)
+        assert "DATEDIFF(MINUTE," in sql_str, (
+            f"Expected DATEDIFF(MINUTE,...) but got: {sql_str}"
+        )
+        # No parameterised datepart
+        assert "DATEDIFF(:" not in sql_str, (
+            f"datepart must not be a bound parameter; got: {sql_str}"
+        )
 
     def test_mssql_dialect_name_routes_to_mssql_path(self):
         """
@@ -228,6 +242,36 @@ class TestMssqlDialect:
         assert "by_category" in result
         assert isinstance(result["by_machine"], list)
         assert isinstance(result["by_category"], list)
+
+    def test_mssql_compiled_sql_has_inline_minute(self):
+        """
+        The SELECT statement actually passed to db.execute() by
+        utilisation_last_days() must compile (under the mssql dialect) to
+        SQL that contains 'DATEDIFF(minute,' as a literal keyword – confirming
+        that the datepart is never sent as a bound parameter.
+        """
+        from sqlalchemy.dialects import mssql as mssql_dialect
+
+        mock_db = self._make_mssql_db_mock()
+        mock_result = MagicMock()
+        mock_result.all.return_value = []
+        mock_db.execute.return_value = mock_result
+
+        utilisation_last_days(mock_db, days=30)
+
+        # Grab the first SELECT statement passed to db.execute()
+        assert mock_db.execute.called, "db.execute was never called"
+        stmt = mock_db.execute.call_args_list[0][0][0]
+
+        compiled = stmt.compile(dialect=mssql_dialect.dialect())
+        sql = str(compiled).upper()
+
+        assert "DATEDIFF(MINUTE," in sql, (
+            f"Expected DATEDIFF(MINUTE,...) inline; got: {sql}"
+        )
+        assert "DATEDIFF(:" not in sql, (
+            f"datepart must not be a bound parameter; got: {sql}"
+        )
 
 
 # ---------------------------------------------------------------------------
