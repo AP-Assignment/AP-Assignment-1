@@ -5,9 +5,13 @@ Created on Tue Jan 13 14:13:55 2026
 @author: NBoyd1
 """
 
+from datetime import timedelta
+
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SubmitField, DateTimeLocalField, TextAreaField, SelectMultipleField, BooleanField
 from wtforms.validators import DataRequired, Email, Length, ValidationError
+
+from .services.booking_rules import MAX_BOOKING_DAYS
 
 class RegisterForm(FlaskForm):
     name = StringField("Full name", validators=[DataRequired(), Length(min=2, max=120)])
@@ -33,3 +37,5 @@ class BookingForm(FlaskForm):
     def validate_end_at(self, field):
         if self.start_at.data and field.data and field.data <= self.start_at.data:
             raise ValidationError("End time must be after start time.")
+        if self.start_at.data and field.data and field.data - self.start_at.data > timedelta(days=MAX_BOOKING_DAYS):
+            raise ValidationError("Maximum booking time is 28 days.")

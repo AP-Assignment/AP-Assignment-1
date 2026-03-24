@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from ..models import BookingRequest, BookingItem, Machine
 
 MAX_DAYS_AHEAD = 90
+MAX_BOOKING_DAYS = 28
 
 def validate_booking_window(start_at: datetime, end_at: datetime) -> tuple[bool, str | None]:
     now = datetime.utcnow()
@@ -20,6 +21,8 @@ def validate_booking_window(start_at: datetime, end_at: datetime) -> tuple[bool,
         return False, f"Bookings can only be made up to {MAX_DAYS_AHEAD} days ahead."
     if end_at <= start_at:
         return False, "End time must be after start time."
+    if end_at - start_at > timedelta(days=MAX_BOOKING_DAYS):
+        return False, "Maximum booking time is 28 days."
     return True, None
 
 def machines_exist_and_available(db: Session, machine_ids: list[int]) -> tuple[bool, str | None]:
