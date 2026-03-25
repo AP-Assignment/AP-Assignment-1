@@ -12,4 +12,4 @@ python-decouple
 pyotp==2.9.0
 qrcode==7.4.2
 Pillow==11.1.0
-pymmsql
+pymssql
