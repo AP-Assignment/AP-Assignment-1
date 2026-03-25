@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-5">
+  <div class="row justify-content-center">
+    <div class="col-md-7 col-lg-5">
+      <div class="card p-4 shadow-sm">
+        <h2 class="h4 fw-semibold mb-2">Two-Factor Authentication</h2>
+        <p class="text-muted small mb-4">Enter the 6-digit code from your authenticator app.</p>
+        <form method="post">
+          {{ form.hidden_tag() }}
+          <div class="mb-3">
+            {{ form.token.label(class_="form-label") }}
+            {{ form.token(class_="form-control form-control-lg", placeholder="000000", maxlength="6", inputmode="numeric", autofocus=True) }}
+            {% if form.token.errors %}
+              <div class="invalid-feedback d-block">
+                {% for error in form.token.errors %}{{ error }}{% endfor %}
+              </div>
+            {% endif %}
+          </div>
+          <div class="d-grid">
+            {{ form.submit(class_="btn btn-primary", value="Verify") }}
+          </div>
+          <div class="small text-muted mt-3 text-center">
+            <a class="link-light" href="{{ url_for('auth.login') }}">Back to sign in</a>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

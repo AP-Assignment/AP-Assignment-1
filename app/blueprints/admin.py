@@ -7,8 +7,8 @@ from sqlalchemy.orm import joinedload, selectinload
 from datetime import datetime, timedelta
 from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app, Response
 from flask_login import login_required, current_user
-from sqlalchemy import select, func
-from ..models import User, BookingRequest, BookingItem, Machine, AuditLog, AccessRequest
+from sqlalchemy import select, func, delete
+from ..models import User, BookingRequest, BookingItem, Machine, AuditLog, AccessRequest, Notification
 from ..services.booking_rules import has_conflicts_for_approved_bookings
 from ..services.utilisation import utilisation_last_days
 from ..services.notifications import queue_notification
@@ -230,6 +230,69 @@ def reject_user(user_id: int):
         queue_notification(db, u.id, "Your account request has been rejected. Contact an admin if you think this is an error.")
         db.commit()
     flash("User rejected.", "info")
+    return redirect(url_for("admin.users"))
+
+@bp.post("/users/<int:user_id>/role")
+@login_required
+def update_user_role(user_id: int):
+    if not _require({"admin"}):
+        return redirect(url_for("admin.users"))
+    
+    new_role = request.form.get("role", "").strip()
+    if new_role not in ("user", "approver", "admin"):
+        flash("Invalid role.", "danger")
+        return redirect(url_for("admin.users"))
+    
+    with current_app.session_factory() as db:
+        u = db.get(User, user_id)
+        if not u:
+            flash("User not found.", "danger")
+            return redirect(url_for("admin.users"))
+        
+        old_role = u.role
+        u.role = new_role
+        db.add(AuditLog(
+            actor_email=current_user.email,
+            action="user_role_change",
+            detail=f"Changed {u.email} role from {old_role} to {new_role}"
+        ))
+        db.commit()
+    
+    flash(f"User role updated to {new_role}.", "success")
+    return redirect(url_for("admin.users"))
+
+@bp.post("/users/<int:user_id>/delete")
+@login_required
+def delete_user(user_id: int):
+    if not _require({"admin"}):
+        return redirect(url_for("admin.users"))
+    
+    with current_app.session_factory() as db:
+        u = db.get(User, user_id)
+        if not u:
+            flash("User not found.", "danger")
+            return redirect(url_for("admin.users"))
+        
+        # Prevent deletion of current user
+        if u.id == current_user.id:
+            flash("You cannot delete your own account.", "danger")
+            return redirect(url_for("admin.users"))
+        
+        user_email = u.email
+        user_name = u.name
+        
+        # Delete related notifications first (they have NOT NULL constraint on user_id)
+        db.execute(delete(Notification).where(Notification.user_id == u.id))
+        
+        db.delete(u)
+        db.add(AuditLog(
+            actor_email=current_user.email,
+            action="user_delete",
+            detail=f"Deleted user {user_email} ({user_name})"
+        ))
+        db.commit()
+    
+    flash(f"User {user_email} has been deleted.", "success")
     return redirect(url_for("admin.users"))
 
 @bp.post("/booking/<int:booking_id>/approve")

@@ -22,6 +22,10 @@ class LoginForm(FlaskForm):
     password = PasswordField("Password", validators=[DataRequired()])
     submit = SubmitField("Sign in")
 
+class TOTPVerificationForm(FlaskForm):
+    token = StringField("Authentication code", validators=[DataRequired()])
+    submit = SubmitField("Verify")
+
 class BookingForm(FlaskForm):
     start_at = DateTimeLocalField("Start", validators=[DataRequired()], format="%Y-%m-%dT%H:%M")
     end_at = DateTimeLocalField("End", validators=[DataRequired()], format="%Y-%m-%dT%H:%M")

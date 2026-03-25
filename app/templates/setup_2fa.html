@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-5">
+  <div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-body p-4">
+          <h2 class="h4 fw-semibold mb-4">Set up Two-Factor Authentication</h2>
+          
+          <div class="alert alert-info" role="alert">
+            <strong>Step 1:</strong> Install an authenticator app on your phone (e.g., Google Authenticator, Microsoft Authenticator, Authy, or 1Password).
+          </div>
+
+          <div class="row align-items-center mb-4">
+            <div class="col-md-6">
+              <p class="fw-semibold mb-3">Step 2A: Scan this QR code</p>
+              <p class="small text-muted mb-2">Open your authenticator app and scan this code.</p>
+              <img src="data:image/png;base64,{{ qr_code }}" alt="QR Code" class="img-fluid border rounded">
+            </div>
+            <div class="col-md-6">
+              <p class="fw-semibold mb-2">Step 2B: Or manually enter this key</p>
+              <p class="small text-muted mb-2">If you can't scan the QR code, enter this key in your authenticator app instead:</p>
+              <div class="bg-dark p-3 rounded font-monospace text-break lh-lg border">
+                {{ secret }}
+              </div>
+              <p class="small text-muted mt-2">⚠️ Store this key somewhere safe. You'll need it to recover access if you lose your phone.</p>
+            </div>
+          </div>
+
+          <hr>
+
+          <div class="alert alert-warning" role="alert">
+            <strong>Step 3:</strong> Your authenticator app will now show a <strong>6-digit code</strong> that changes every 30 seconds. Enter the current code below to confirm setup.
+          </div>
+
+          <form method="post" action="{{ url_for('auth.confirm_2fa') }}">
+            {{ form.hidden_tag() }}
+            <div class="mb-3">
+              <label for="{{ form.token.id }}" class="form-label fw-semibold">Enter the 6-digit code from your authenticator app</label>
+              {{ form.token(class_="form-control form-control-lg", placeholder="000000", maxlength="6", inputmode="numeric", autofocus=True) }}
+              {% if form.token.errors %}
+                <div class="invalid-feedback d-block">
+                  {% for error in form.token.errors %}{{ error }}{% endfor %}
+                </div>
+              {% endif %}
+            </div>
+            <div class="d-grid gap-2">
+              {{ form.submit(class_="btn btn-primary", value="Enable 2FA") }}
+              <a href="{{ url_for('bookings.my_bookings') }}" class="btn btn-outline-secondary">Cancel</a>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
