@@ -3,6 +3,7 @@
 
 from flask import Flask
 from flask_login import LoginManager
+from flask_wtf.csrf import CSRFProtect
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, scoped_session
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -65,6 +66,7 @@ def create_app():
     Base.metadata.create_all(bind=engine)
 
     login_manager.init_app(app)
+    CSRFProtect(app)
 
     @login_manager.user_loader
     def load_user(user_id: str):

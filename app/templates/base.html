@@ -40,6 +40,7 @@
                 {% else %}
                   <li><a class="dropdown-item" href="#">2FA enabled</a></li>
                   <li><form method="post" action="{{ url_for('auth.disable_2fa') }}" class="d-inline">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button class="dropdown-item" type="submit" onclick="return confirm('Disable 2FA?')">Disable 2FA</button>
                   </form></li>
                 {% endif %}

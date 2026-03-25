@@ -19,9 +19,11 @@
                   <td>{{ u.team }}</td>
                   <td class="text-end">
                     <form method="post" action="{{ url_for('admin.approve_user', user_id=u.id) }}" class="d-inline">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <button class="btn btn-sm btn-success">Approve</button>
                     </form>
                     <form method="post" action="{{ url_for('admin.reject_user', user_id=u.id) }}" class="d-inline">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <button class="btn btn-sm btn-outline-light">Reject</button>
                     </form>
                   </td>
@@ -49,6 +51,7 @@
                   <td class="small">{{ u.email }}</td>
                   <td>
                     <form method="post" action="{{ url_for('admin.update_user_role', user_id=u.id) }}" class="d-inline">
+                      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                       <select name="role" class="form-select form-select-sm" onchange="this.form.submit()" style="width: auto; display: inline-block;">
                         <option value="user" {% if u.role == 'user' %}selected{% endif %}>user</option>
                         <option value="approver" {% if u.role == 'approver' %}selected{% endif %}>approver</option>
@@ -59,6 +62,7 @@
                   <td class="text-end">
                     {% if u.id != current_user.id %}
                       <form method="post" action="{{ url_for('admin.delete_user', user_id=u.id) }}" class="d-inline" onsubmit="return confirm('Delete user {{ u.email }}? This action cannot be undone.');">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" class="btn btn-sm btn-danger">Delete</button>
                       </form>
                     {% else %}

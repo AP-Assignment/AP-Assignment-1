@@ -199,13 +199,17 @@ def confirm_2fa():
     # Verify the token - strip whitespace before verification
     token = form.token.data.strip()
     totp = pyotp.TOTP(session["temp_2fa_secret"])
-    if not totp.verify(token):
+    if not totp.verify(token, valid_window=1):
         flash("Invalid authentication code. Please try again.", "danger")
         return redirect(url_for("auth.setup_2fa"))
 
     # Enable 2FA
     with current_app.session_factory() as db:
         user = db.execute(select(User).where(User.id == current_user.id)).scalar_one_or_none()
+        if user is None:
+            session.pop("temp_2fa_secret", None)
+            flash("Your session is invalid. Please log in again.", "danger")
+            return redirect(url_for("auth.login"))
         user.two_fa_secret = session["temp_2fa_secret"]
         user.two_fa_enabled = True
         db.add(AuditLog(actor_email=user.email, action="enable_2fa", detail="2FA enabled on account"))
@@ -222,6 +226,9 @@ def disable_2fa():
     """Disable 2FA for the current user."""
     with current_app.session_factory() as db:
         user = db.execute(select(User).where(User.id == current_user.id)).scalar_one_or_none()
+        if user is None:
+            flash("Your session is invalid. Please log in again.", "danger")
+            return redirect(url_for("auth.login"))
         user.two_fa_enabled = False
         user.two_fa_secret = None
         db.add(AuditLog(actor_email=user.email, action="disable_2fa", detail="2FA disabled on account"))
