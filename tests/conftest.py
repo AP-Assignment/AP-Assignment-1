@@ -7,10 +7,6 @@ Integration tests use Flask's test client - no external browser drivers required
 
 import pytest
 import os
-import tempfile
-from flask import Flask
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker, scoped_session
 
 from app.db import Base
 
@@ -18,33 +14,25 @@ from app.db import Base
 @pytest.fixture()
 def app():
     """Create and configure a new app instance for testing."""
-    # Create a temporary database
-    db_fd, db_path = tempfile.mkstemp()
-    
-    app = Flask(__name__, template_folder="app/templates", static_folder="app/static")
-    app.config["TESTING"] = True
-    app.config["SECRET_KEY"] = "test-secret-key"
-    app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
-    app.config["WTF_CSRF_ENABLED"] = False  # Disable CSRF for testing
-    
-    # Import and initialize extensions
+    # Set DATABASE_URL before create_app() so that the engine, session factory,
+    # and Flask-Login's user_loader all share the same in-memory test database.
+    os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+
     from app import create_app as factory_create_app
     app = factory_create_app()
     app.config["TESTING"] = True
     app.config["SECRET_KEY"] = "test-secret-key"
-    app.config["SQLALCHEMY_DATABASE_URI"] = f"sqlite:///{db_path}"
     app.config["WTF_CSRF_ENABLED"] = False
-    
-    # Create tables
-    engine = create_engine(f"sqlite:///{db_path}", future=True)
-    Base.metadata.create_all(bind=engine)
-    app.session_factory = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
-    
+
+    # Ensure all tables exist on the app's configured engine.
+    engine = getattr(app, "engine", None)
+    if engine is not None:
+        Base.metadata.create_all(bind=engine)
+
     yield app
-    
-    # Cleanup
-    os.close(db_fd)
-    os.unlink(db_path)
+
+    # Remove the override so it does not bleed into other test modules.
+    os.environ.pop("DATABASE_URL", None)
 
 
 @pytest.fixture()

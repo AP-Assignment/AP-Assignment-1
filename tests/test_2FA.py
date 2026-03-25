@@ -3,7 +3,7 @@
 
 import pytest
 import pyotp
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.db import Base

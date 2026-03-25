@@ -6,7 +6,7 @@ Created on Tue Jan 13 14:08:29 2026
 """
 
 import random
-from sqlalchemy import create_engine, select, text
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from app.db import Base
 from app.models import Site, Machine, User, Location
@@ -19,27 +19,6 @@ def seed(db_url: str = "sqlite:///app.db"):
         connect_args={"check_same_thread": False} if db_url.startswith("sqlite") else {},
     )
     Base.metadata.create_all(bind=engine)
-    
-    # Ensure 2FA columns exist (for existing databases)
-    with engine.begin() as conn:
-        if engine.dialect.name == "sqlite":
-            # SQLite doesn't have IF NOT EXISTS for columns easily, check manually
-            result = conn.execute(text("PRAGMA table_info(users)")).fetchall()
-            column_names = [row[1] for row in result]
-            if "two_fa_secret" not in column_names:
-                conn.execute(text("ALTER TABLE users ADD COLUMN two_fa_secret VARCHAR(32) NULL"))
-            if "two_fa_enabled" not in column_names:
-                conn.execute(text("ALTER TABLE users ADD COLUMN two_fa_enabled BOOLEAN DEFAULT 0"))
-        elif engine.dialect.name == "mssql":
-            # SQL Server
-            try:
-                conn.execute(text("ALTER TABLE users ADD two_fa_secret VARCHAR(32) NULL"))
-            except:
-                pass
-            try:
-                conn.execute(text("ALTER TABLE users ADD two_fa_enabled BIT DEFAULT 0"))
-            except:
-                pass
     
     Session = sessionmaker(bind=engine, future=True)
 

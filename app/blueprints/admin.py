@@ -7,7 +7,7 @@ from sqlalchemy.orm import joinedload, selectinload
 from datetime import datetime, timedelta
 from flask import Blueprint, render_template, redirect, url_for, flash, request, current_app, Response
 from flask_login import login_required, current_user
-from sqlalchemy import select, func, delete
+from sqlalchemy import select, func, delete, exists, or_, literal
 from ..models import User, BookingRequest, BookingItem, Machine, AuditLog, AccessRequest, Notification
 from ..services.booking_rules import has_conflicts_for_approved_bookings
 from ..services.utilisation import utilisation_last_days
@@ -276,6 +276,25 @@ def delete_user(user_id: int):
         # Prevent deletion of current user
         if u.id == current_user.id:
             flash("You cannot delete your own account.", "danger")
+            return redirect(url_for("admin.users"))
+        
+        # Prevent deletion when the user has related booking or access-request records.
+        # Use EXISTS sub-queries so the DB can short-circuit on the first match.
+        has_related = db.execute(
+            select(literal(1)).where(
+                or_(
+                    exists(select(BookingRequest.id).where(BookingRequest.requester_id == u.id)),
+                    exists(select(AccessRequest.id).where(AccessRequest.requester_id == u.id)),
+                )
+            )
+        ).first() is not None
+
+        if has_related:
+            flash(
+                f"Cannot delete {u.email}: this account has associated booking or access-request records. "
+                "Deactivate the account instead.",
+                "danger",
+            )
             return redirect(url_for("admin.users"))
         
         user_email = u.email

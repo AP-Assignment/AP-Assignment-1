@@ -237,7 +237,7 @@ class User(Base, UserMixin):
         try:
             token = token.strip()
             return self.get_totp().verify(token, valid_window=1)
-        except Exception:
+        except (AttributeError, ValueError, TypeError):
             return False
 
     def get_provisioning_uri(self) -> str:
