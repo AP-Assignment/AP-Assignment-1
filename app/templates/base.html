@@ -30,6 +30,21 @@
               <li class="nav-item"><a class="nav-link" href="{{ url_for('admin.users') }}">Users</a></li>
               <li class="nav-item"><a class="nav-link" href="{{ url_for('admin.inventory') }}">Inventory</a></li>
             {% endif %}
+            <li class="nav-item dropdown">
+              <a class="nav-link dropdown-toggle" href="#" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+                Settings
+              </a>
+              <ul class="dropdown-menu dropdown-menu-dark">
+                {% if not current_user.two_fa_enabled %}
+                  <li><a class="dropdown-item" href="{{ url_for('auth.setup_2fa') }}">Enable 2FA</a></li>
+                {% else %}
+                  <li><a class="dropdown-item" href="#">2FA enabled</a></li>
+                  <li><form method="post" action="{{ url_for('auth.disable_2fa') }}" class="d-inline">
+                    <button class="dropdown-item" type="submit" onclick="return confirm('Disable 2FA?')">Disable 2FA</button>
+                  </form></li>
+                {% endif %}
+              </ul>
+            </li>
             <li class="nav-item"><a class="nav-link" href="{{ url_for('auth.logout') }}">Sign out</a></li>
           {% else %}
             <li class="nav-item"><a class="nav-link" href="{{ url_for('auth.login') }}">Sign in</a></li>

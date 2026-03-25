@@ -10,3 +10,6 @@ email-validator==2.1.1
 gunicorn==21.2.0
 pymssql
 python-decouple
+pyotp==2.9.0
+qrcode==7.4.2
+Pillow==11.1.0

@@ -44,6 +44,8 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
 
+import pyotp
+
 
 class Site(Base):
     """A physical testing site (e.g. a city hub).
@@ -182,6 +184,8 @@ class User(Base, UserMixin):
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")  # pending | active | rejected
     manager_email: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    two_fa_secret: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
+    two_fa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Relationships — explicit foreign_keys disambiguate the two FKs on
     # BookingRequest and AccessRequest that both point back to users.id
@@ -210,6 +214,33 @@ class User(Base, UserMixin):
 
     def is_active(self) -> bool:
         return self.status == "active"
+
+    def generate_two_fa_secret(self) -> str:
+        """Generate and store a new 2FA secret."""
+        secret = pyotp.random_base32()
+        self.two_fa_secret = secret
+        return secret
+
+    def get_totp(self) -> pyotp.TOTP:
+        """Get TOTP object for this user."""
+        if not self.two_fa_secret:
+            raise ValueError("2FA not set up for this user")
+        return pyotp.TOTP(self.two_fa_secret)
+
+    def verify_totp(self, token: str) -> bool:
+        """Verify a TOTP token."""
+        if not self.two_fa_secret:
+            return False
+        try:
+            return self.get_totp().verify(token)
+        except Exception:
+            return False
+
+    def get_provisioning_uri(self) -> str:
+        """Get provisioning URI for QR code generation."""
+        if not self.two_fa_secret:
+            raise ValueError("2FA secret not set")
+        return self.get_totp().provisioning_uri(name=self.email, issuer_name="AP Assignment System")
 
 
 class BookingRequest(Base):
